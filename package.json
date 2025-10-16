@@ -1,0 +1,20 @@
+{
+  "name": "cv-agent",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "cv-agent": "./bin/cv-agent.mjs"
+  },
+  "scripts": {
+    "start": "node bin/cv-agent.mjs",
+    "dev": "node --trace-warnings bin/cv-agent.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "fs-extra": "^11.2.0",
+    "openai": "^4.64.0",
+    "pdf-parse": "^1.1.1",
+    "puppeteer": "^23.6.0",
+    "yargs": "^17.7.2"
+  }
+}
