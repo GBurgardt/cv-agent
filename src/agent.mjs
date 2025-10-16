@@ -172,6 +172,9 @@ El PDF de salida debe ser: ${absOut}`
       ? { type: 'function', name: forcedTool }
       : 'auto';
     debugLog('turn', { turn: turn + 1, toolChoice: toolChoiceParam });
+    if (forcedTool) {
+      console.log(`[cv-agent] Ejecutando ${forcedTool}…`);
+    }
     const response = await openai.responses.create({
       model: modelId,
       input,
@@ -192,21 +195,6 @@ El PDF de salida debe ser: ${absOut}`
     if (!toolCalls.length) {
       finalText = response?.output_text || '';
       debugLog('no-tool-call', { forcedTool, output: finalText });
-      if (forcedTool) {
-        input.push({
-          role: 'system',
-          content: toInputContent(
-            `Necesito que llames inmediatamente a la herramienta ${forcedTool}. No produzcas respuesta final hasta completarlo.`
-          ),
-        });
-      } else {
-        input.push({
-          role: 'system',
-          content: toInputContent(
-            'Recordatorio: debes utilizar la herramienta render_template_pdf para generar el CV final antes de responder al usuario.'
-          ),
-        });
-      }
       input.push({
         role: 'system',
         content: toInputContent(
@@ -229,8 +217,10 @@ El PDF de salida debe ser: ${absOut}`
 
       let result;
       if (name === 'read_cv_pdf') {
+        console.log('[cv-agent] Leyendo CV…');
         result = await readPdfText(args?.path);
       } else if (name === 'render_template_pdf') {
+        console.log('[cv-agent] Renderizando plantilla…');
         result = await renderTemplateToPdf({
           templatePath: args?.template_path || absTemplate,
           outputPath: args?.output_path || absOut,
@@ -239,6 +229,8 @@ El PDF de salida debe ser: ${absOut}`
         renderSucceeded = !!result?.ok;
         if (!renderSucceeded) {
           lastRenderError = result?.error || 'Fallo desconocido al renderizar.';
+        } else {
+          console.log('[cv-agent] Plantilla renderizada.');
         }
       } else {
         result = { ok: false, error: `Tool desconocida: ${name}` };
