@@ -2,6 +2,11 @@ import fs from 'fs/promises';
 import path from 'path';
 import puppeteer from 'puppeteer';
 
+const DEBUG = process.env.CV_AGENT_DEBUG === '1';
+const debugLog = (...args) => {
+  if (DEBUG) console.log('[render_template_pdf:debug]', ...args);
+};
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -36,17 +41,15 @@ export async function renderTemplateToPdf({ templatePath, outputPath, fields }) 
     const absTemplate = path.resolve(templatePath);
     const absOut = path.resolve(outputPath);
 
-    console.log(`[render_template_pdf] template=${absTemplate}`);
-    console.log(`[render_template_pdf] output=${absOut}`);
-    console.log(`[render_template_pdf] fields=${JSON.stringify(fields ?? {}, null, 2)}`);
+    debugLog('inputs', { template: absTemplate, output: absOut, fields });
 
     await fs.mkdir(path.dirname(absOut), { recursive: true });
 
     const templateHtml = await fs.readFile(absTemplate, 'utf8');
-    console.log('[render_template_pdf] template leído, longitud:', templateHtml.length);
+    debugLog('template-length', templateHtml.length);
     const filledHtml = applyPlaceholders(templateHtml, fields);
 
-    console.log('[render_template_pdf] HTML final longitud:', filledHtml.length);
+    debugLog('filled-length', filledHtml.length);
 
     const browser = await puppeteer.launch({ headless: 'new' });
     const page = await browser.newPage();
@@ -60,7 +63,7 @@ export async function renderTemplateToPdf({ templatePath, outputPath, fields }) 
     });
     await browser.close();
 
-    console.log(`[render_template_pdf] PDF generado correctamente en ${absOut}`);
+    debugLog('pdf-generated', absOut);
 
     return { ok: true, output_path: absOut };
   } catch (err) {

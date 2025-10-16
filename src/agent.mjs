@@ -5,6 +5,7 @@ import { readPdfText } from './tools/pdf.mjs';
 import { renderTemplateToPdf } from './tools/render.mjs';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const DEBUG = process.env.CV_AGENT_DEBUG === '1';
 
 const SYSTEM_PROMPT = `
 Sos "CV Builder". Objetivo: transformar un CV PDF en un PDF final con un RESUMEN y SKILLS, usando un template HTML.
@@ -125,15 +126,16 @@ function toInputContent(text) {
 }
 
 export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
+  const debugLog = (...args) => {
+    if (DEBUG) console.log('[cv-agent:debug]', ...args);
+  };
+
   const absCv = path.resolve(cvPath);
   const absOut = path.resolve(outPath);
   const absTemplate = path.resolve(templatePath);
 
-  console.log('[agent] Iniciando cv-agent');
-  console.log(`[agent] cvPath=${absCv}`);
-  console.log(`[agent] outPath=${absOut}`);
-  console.log(`[agent] templatePath=${absTemplate}`);
-  console.log(`[agent] model=${model || process.env.OPENAI_MODEL || 'gpt-5-codex'}`);
+  debugLog('start', { cvPath: absCv, outPath: absOut, templatePath: absTemplate, modelOverride: model });
+  console.log('[cv-agent] Generando CV…');
 
   await fs.access(absCv);
   await fs.access(absTemplate);
@@ -162,15 +164,14 @@ El PDF de salida debe ser: ${absOut}`
   let requiredToolIndex = 0;
 
   const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS ?? 128000);
+  let finalMessageSet = false;
 
   for (let turn = 0; turn < 6; turn += 1) {
     const forcedTool = requiredToolPlan[requiredToolIndex] || null;
     const toolChoiceParam = forcedTool
       ? { type: 'function', name: forcedTool }
       : 'auto';
-    console.log(`[agent] tool_choice usado en este turno: ${JSON.stringify(toolChoiceParam)}`);
-
-    console.log(`\n[agent] ===== Turno ${turn + 1} =====`);
+    debugLog('turn', { turn: turn + 1, toolChoice: toolChoiceParam });
     const response = await openai.responses.create({
       model: modelId,
       input,
@@ -181,22 +182,16 @@ El PDF de salida debe ser: ${absOut}`
       ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
     });
 
-    console.log('[agent] respuesta recibida, id:', response?.id);
-    console.log('[agent] response.debug:', JSON.stringify(response, null, 2));
+    debugLog('response', response);
 
     lastResponse = response;
     const toolCalls = extractToolCalls(response);
 
-    if (!toolCalls.length) {
-      console.log('[agent] No hay tool calls en este turno.');
-    } else {
-      console.log(`[agent] tool calls (${toolCalls.length}):`, toolCalls.map((call) => call.name).join(', '));
-    }
+    debugLog('tool-calls', toolCalls);
 
     if (!toolCalls.length) {
       finalText = response?.output_text || '';
-      console.warn('[agent] No se recibió tool call. Recordatorio explícito agregado.');
-      console.warn('[agent] output_text:', finalText);
+      debugLog('no-tool-call', { forcedTool, output: finalText });
       if (forcedTool) {
         input.push({
           role: 'system',
@@ -230,12 +225,12 @@ El PDF de salida debe ser: ${absOut}`
         args = {};
       }
 
+      debugLog('tool-exec', { name, args });
+
       let result;
       if (name === 'read_cv_pdf') {
-        console.log(`[agent] Ejecutando ${name} con args`, args);
         result = await readPdfText(args?.path);
       } else if (name === 'render_template_pdf') {
-        console.log(`[agent] Ejecutando ${name} con args`, args);
         result = await renderTemplateToPdf({
           templatePath: args?.template_path || absTemplate,
           outputPath: args?.output_path || absOut,
@@ -249,24 +244,29 @@ El PDF de salida debe ser: ${absOut}`
         result = { ok: false, error: `Tool desconocida: ${name}` };
       }
 
-      console.log(`[agent] Resultado ${name}:`, result);
+      debugLog('tool-result', { name, result });
       input.push(makeToolOutput(callId, result));
 
       if (forcedTool && name === forcedTool && result?.ok) {
         requiredToolIndex += 1;
-        console.log(
-          `[agent] Tool ${name} ejecutada correctamente. Avanzando plan (${requiredToolIndex}/${requiredToolPlan.length}).`
-        );
+        debugLog('plan-progress', { completed: name, progress: `${requiredToolIndex}/${requiredToolPlan.length}` });
+        if (requiredToolIndex >= requiredToolPlan.length && renderSucceeded) {
+          finalText = `PDF generado correctamente en ${absOut}`;
+          finalMessageSet = true;
+          debugLog('plan-complete');
+          break;
+        }
       }
     }
 
     previousResponseId = response.id;
+    if (finalMessageSet) break;
   }
 
   try {
-    console.log(`[agent] renderSucceeded flag: ${renderSucceeded}`);
+    debugLog('render-flag', { renderSucceeded });
     await fs.access(absOut);
-    console.log(`[agent] Validación final: archivo ${absOut} encontrado.`);
+    debugLog('output-exists', absOut);
   } catch {
     if (lastRenderError) {
       throw new Error(`No se generó el PDF de salida: ${lastRenderError}`);
@@ -275,14 +275,14 @@ El PDF de salida debe ser: ${absOut}`
   }
 
   if (!renderSucceeded) {
-    console.error('[agent] render_template_pdf no reportó éxito.');
+    debugLog('render-failure', lastRenderError);
     throw new Error(lastRenderError || 'La herramienta render_template_pdf no completó correctamente.');
   }
 
-  console.log('[agent] Proceso finalizado correctamente.');
-  if (finalText) {
-    console.log('[agent] Texto final del modelo:', finalText);
-  }
+  const finalMessage = finalText || `PDF generado correctamente en ${absOut}`;
+  finalText = finalMessage;
+  debugLog('final-message', finalMessage);
+  console.log(`[cv-agent] Listo. PDF generado en ${absOut}`);
 
   return {
     outputPath: absOut,
