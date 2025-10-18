@@ -9,6 +9,12 @@ import { exportResumePdf } from './tools/exportPdf.mjs';
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const DEBUG = process.env.CV_AGENT_DEBUG === '1';
 
+function truncate(text, max = 280) {
+  if (!text) return '';
+  const clean = text.replace(/\s+/g, ' ').trim();
+  return clean.length <= max ? clean : `${clean.slice(0, max - 1)}…`;
+}
+
 const SYSTEM_PROMPT = `
 Sos "CV Builder". Objetivo: transformar un CV PDF en un PDF final con un RESUMEN y SKILLS, usando un template HTML.
 
@@ -20,9 +26,10 @@ Reglas:
   • Opcional: NAME, ROLE si se infiere claramente del CV (ej. primera línea/título).
 - Trabajá con estos pasos:
   1. Usá fill_template_html(template_path, output_html_path, fields) para volcar los datos en el HTML de trabajo.
-  2. Usá preview_resume_snapshot(html_path, image_path?) para generar una vista previa. Revisala; si hay errores, ajustá los campos y repetí.
+  2. Usá preview_resume_snapshot(html_path, image_path?) una sola vez para revisar el layout. Si necesitás ajustar campos hacelo sólo una vez más, justificando qué se ve mal (texto corrido, columnas desalineadas, etc.). Después de la segunda revisión no vuelvas a llamar preview_resume_snapshot.
   3. Cuando todo esté bien, llamá export_resume_pdf(html_path, output_pdf_path) para producir el PDF final.
 - No devuelvas texto final al usuario hasta completar export_resume_pdf.
+- En cada revisión explicá en texto qué viste en la imagen (qué se ve bien o mal) antes de decidir rellenar nuevamente.
 - Tono: conciso, profesional, español neutro, sin emojis.
 
 Si faltan NAME o ROLE, dejalos vacíos. Asegurate de que SKILLS sea una lista de strings simples.
@@ -129,6 +136,33 @@ function toInputContent(text) {
   return text;
 }
 
+function extractModelObservation(resp) {
+  const snippets = [];
+  const outputs = resp?.output || [];
+  try {
+    for (const block of outputs) {
+      if (!block) continue;
+      if (block.type === 'reasoning') {
+        if (Array.isArray(block.summary)) {
+          for (const item of block.summary) {
+            if (item?.type === 'summary_text' && item.text) snippets.push(item.text);
+          }
+        }
+        if (typeof block.text === 'string' && block.text.trim()) snippets.push(block.text);
+      } else if (block.type === 'message') {
+        const content = block.content || [];
+        for (const part of content) {
+          if (typeof part?.text === 'string' && part.text.trim()) snippets.push(part.text);
+          if (part?.type === 'output_text' && part.text) snippets.push(part.text);
+        }
+      }
+    }
+  } catch (err) {
+    if (DEBUG) console.warn('[cv-agent:debug] observation parse error:', err?.message || err);
+  }
+  return snippets.map((s) => s.trim()).filter(Boolean).join(' ').trim();
+}
+
 export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
   const debugLog = (...args) => {
     if (DEBUG) console.log('[cv-agent:debug]', ...args);
@@ -192,7 +226,9 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
 
     const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS ?? 128000);
 
-    turnLoop: for (let turn = 0; turn < 8; turn += 1) {
+    const MAX_PREVIEWS = 2;
+    let previewCount = 0;
+turnLoop: for (let turn = 0; turn < 8; turn += 1) {
       debugLog('turn', { turn: turn + 1 });
       const response = await openai.responses.create({
         model: modelId,
@@ -205,6 +241,10 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
       });
 
       debugLog('response', response);
+      const observation = extractModelObservation(response);
+      if (observation) {
+        logDetail(`model: ${truncate(observation)}`);
+      }
 
       lastResponse = response;
       const toolCalls = extractToolCalls(response);
@@ -234,45 +274,55 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
         let result;
 
         if (name === 'fill_template_html') {
-          const templatePathArg = args?.template_path || absTemplate;
-          const outputHtmlPath = args?.output_html_path || workingHtmlPath;
-          logAction('Calling fill_template_html');
-          logDetail(`template_path: ${templatePathArg}`);
-          logDetail(`output_html_path: ${outputHtmlPath}`);
-          try {
-            result = await fillTemplateHtml({
-              templatePath: templatePathArg,
-              outputHtmlPath,
-              fields: args?.fields || {},
-            });
-          } catch (err) {
-            result = { ok: false, error: err?.message || String(err) };
-            logDetail(`error: ${result.error}`);
-          }
-          if (result?.html_path) {
-            lastHtmlPath = result.html_path;
-            logDetail(`html_path: ${lastHtmlPath}`);
+          if (previewCount >= MAX_PREVIEWS) {
+            logDetail('preview limit reached; fill_template_html skipped.');
+            result = { ok: false, error: 'Límite de correcciones alcanzado.' };
+          } else {
+            const templatePathArg = args?.template_path || absTemplate;
+            const outputHtmlPath = args?.output_html_path || workingHtmlPath;
+            logAction('Calling fill_template_html');
+            logDetail(`template_path: ${templatePathArg}`);
+            logDetail(`output_html_path: ${outputHtmlPath}`);
+            try {
+              result = await fillTemplateHtml({
+                templatePath: templatePathArg,
+                outputHtmlPath,
+                fields: args?.fields || {},
+              });
+            } catch (err) {
+              result = { ok: false, error: err?.message || String(err) };
+              logDetail(`error: ${result.error}`);
+            }
+            if (result?.html_path) {
+              lastHtmlPath = result.html_path;
+              logDetail(`html_path: ${lastHtmlPath}`);
+            }
           }
         } else if (name === 'preview_resume_snapshot') {
-          const htmlPath = args?.html_path || lastHtmlPath;
-          const imagePath = args?.image_path || previewImagePath;
-          logAction('Calling preview_resume_snapshot');
-          logDetail(`html_path: ${htmlPath}`);
-          logDetail(`image_path: ${imagePath}`);
-          try {
-            result = await previewResumeSnapshot({
-              htmlPath,
-              imagePath,
-              width: args?.width,
-              height: args?.height,
-            });
-          } catch (err) {
-            result = { ok: false, error: err?.message || String(err) };
-            logDetail(`error: ${result.error}`);
-          }
-          if (result?.image_path) tempFiles.push(result.image_path);
-          if (result?.image_base64) {
-            logDetail(`preview_base64_length: ${result.image_base64.length}`);
+          if (previewCount >= MAX_PREVIEWS) {
+            logDetail('preview limit reached; preview_resume_snapshot skipped.');
+            result = { ok: false, error: 'Límite de previsualizaciones alcanzado.' };
+          } else {
+            const htmlPath = args?.html_path || lastHtmlPath;
+            const imagePath = args?.image_path || previewImagePath;
+            logAction('Calling preview_resume_snapshot');
+            logDetail(`html_path: ${htmlPath}`);
+            logDetail(`image_path: ${imagePath}`);
+            try {
+              result = await previewResumeSnapshot({
+                htmlPath,
+                imagePath,
+                width: args?.width,
+                height: args?.height,
+              });
+            } catch (err) {
+              result = { ok: false, error: err?.message || String(err) };
+              logDetail(`error: ${result.error}`);
+            }
+            if (result?.image_path) tempFiles.push(result.image_path);
+            if (result?.image_base64) {
+              logDetail(`preview_base64_length: ${result.image_base64.length}`);
+            }
           }
         } else if (name === 'export_resume_pdf') {
           const htmlPath = args?.html_path || lastHtmlPath;
@@ -304,6 +354,8 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
         input.push(makeToolOutput(callId, result));
 
         if (name === 'preview_resume_snapshot' && result?.image_base64) {
+          previewCount += 1;
+          logDetail(`previews used: ${previewCount} / ${MAX_PREVIEWS}`);
           logAction('Preview ready for review.');
           if (result?.image_path) {
             try {
@@ -320,6 +372,13 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
               { type: 'input_image', image_url: dataUrl },
             ],
           });
+          if (previewCount >= MAX_PREVIEWS) {
+            logDetail('maximum previews reached; no more snapshot calls allowed.');
+            input.push({
+              role: 'system',
+              content: toInputContent('Alcanzaste el límite de correcciones. Continuá con export_resume_pdf o describí el problema en texto.'),
+            });
+          }
           previousResponseId = response.id;
           continue turnLoop;
         }
