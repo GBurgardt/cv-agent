@@ -1,91 +1,239 @@
 <!doctype html>
 <html lang="es">
 <head>
-  <meta charset="utf-8"/>
-  <title>CV - Cloud(x); Template</title>
+  <meta charset="utf-8" />
+  <title>CloudX CV Template</title>
   <style>
-    @page { size: A4; margin: 20mm; }
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&family=Open+Sans:wght@400;600&family=Roboto:wght@400;500&display=swap');
+
+    :root {
+      --cloudx-text: #303c42;
+      --cloudx-accent: #ff5100;
+      --cloudx-muted: #6b7b82;
+      --cloudx-border: #e6ebed;
+      --cloudx-bg: #f6f8f9;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
     body {
-      font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-      color: #111;
+      margin: 0;
+      background: var(--cloudx-bg);
+      font-family: 'Roboto', 'Open Sans', Arial, sans-serif;
+      color: var(--cloudx-text);
     }
-    .header {
+
+    .resume-wrapper {
+      max-width: 960px;
+      margin: 48px auto;
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 12px 30px rgba(48, 60, 66, 0.12);
+      padding: 56px 64px;
+    }
+
+    header.resume-header {
+      border-bottom: 3px solid var(--cloudx-accent);
+      padding-bottom: 28px;
+      margin-bottom: 36px;
+    }
+
+    .resume-title {
+      font-family: 'Montserrat', sans-serif;
+      font-size: 42px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin: 0;
+    }
+
+    .resume-role {
+      font-family: 'Open Sans', sans-serif;
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      margin: 12px 0 0;
+      color: var(--cloudx-muted);
+      text-transform: uppercase;
+    }
+
+    .resume-summary {
+      margin-bottom: 48px;
+      line-height: 1.7;
+      font-size: 15px;
+    }
+
+    .resume-summary p {
+      margin: 0;
+    }
+
+    .resume-grid {
       display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 12px;
+      gap: 48px;
+      align-items: flex-start;
     }
-    .title {
-      font-size: 22px;
+
+    .column-main {
+      flex: 1.75;
+    }
+
+    .column-side {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
+
+    .section {
+      margin-bottom: 36px;
+    }
+
+    .section-title {
+      font-family: 'Montserrat', sans-serif;
+      font-size: 16px;
+      letter-spacing: 1.2px;
       font-weight: 700;
-      letter-spacing: 0.2px;
+      color: var(--cloudx-accent);
+      text-transform: uppercase;
+      margin: 0 0 18px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid var(--cloudx-border);
     }
-    .role {
-      font-size: 14px;
-      color: #666;
-      margin-top: 2px;
+
+    .experience-list {
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
     }
-    .badge {
-      font-size: 12px;
-      color: #555;
-      border: 1px solid #ddd;
-      padding: 4px 8px;
-      border-radius: 6px;
+
+    .experience-item h3 {
+      font-family: 'Montserrat', sans-serif;
+      font-size: 18px;
+      margin: 0;
+      letter-spacing: 0.5px;
     }
-    hr {
-      border: 0;
-      border-top: 1px solid #eee;
-      margin: 14px 0;
-    }
-    h2 {
-      font-size: 14px;
+
+    .experience-meta {
+      font-size: 13px;
       text-transform: uppercase;
       letter-spacing: 0.8px;
-      color: #444;
-      margin: 14px 0 6px;
+      color: var(--cloudx-muted);
+      margin: 6px 0 12px;
     }
-    p {
-      font-size: 12.5px;
-      line-height: 1.55;
-      margin: 0 0 10px;
-      white-space: pre-wrap;
+
+    .experience-details {
+      margin: 0;
+      line-height: 1.6;
+      font-size: 14px;
     }
-    ul {
-      margin: 6px 0 8px 18px;
+
+    .experience-details ul {
+      margin: 8px 0 0;
+      padding-left: 18px;
+    }
+
+    .experience-details li {
+      margin-bottom: 6px;
+    }
+
+    .tag-list,
+    .bullet-list {
+      margin: 0;
       padding: 0;
+      list-style: none;
+      font-size: 14px;
+      line-height: 1.6;
     }
-    li {
-      font-size: 12.5px;
-      margin-bottom: 4px;
+
+    .tag-list li {
+      background: rgba(255, 81, 0, 0.12);
+      color: var(--cloudx-accent);
+      padding: 6px 10px;
+      border-radius: 12px;
+      display: inline-block;
+      margin: 0 8px 10px 0;
+      font-weight: 600;
+      letter-spacing: 0.4px;
     }
-    .muted {
-      color: #777;
+
+    .bullet-list li {
+      position: relative;
+      padding-left: 18px;
+      margin-bottom: 8px;
     }
-    .footer {
-      margin-top: 14px;
-      font-size: 11px;
-      color: #999;
-      text-align: right;
+
+    .bullet-list li::before {
+      content: '•';
+      position: absolute;
+      left: 0;
+      color: var(--cloudx-accent);
+      font-weight: 700;
+    }
+
+    .note {
+      font-size: 12px;
+      color: var(--cloudx-muted);
+      margin-top: 24px;
+      line-height: 1.4;
+    }
+
+    @media print {
+      body {
+        background: #fff;
+      }
+
+      .resume-wrapper {
+        margin: 0;
+        box-shadow: none;
+        border-radius: 0;
+      }
     }
   </style>
 </head>
 <body>
-  <div class="header">
-    <div>
-      <div class="title">__NAME__</div>
-      <div class="role">__ROLE__</div>
+  <main class="resume-wrapper">
+    <header class="resume-header">
+      <h1 class="resume-title">__NAME__</h1>
+      <h2 class="resume-role">__ROLE__</h2>
+    </header>
+
+    <section class="resume-summary">
+      <p>__SUMMARY__</p>
+    </section>
+
+    <div class="resume-grid">
+      <div class="column-main">
+        <section class="section">
+          <h3 class="section-title">Experience</h3>
+          <div class="experience-list">__EXPERIENCE__</div>
+        </section>
+      </div>
+
+      <aside class="column-side">
+        <section class="section">
+          <h3 class="section-title">Skills</h3>
+          <ul class="tag-list">__SKILLS__</ul>
+        </section>
+
+        <section class="section">
+          <h3 class="section-title">Languages</h3>
+          <ul class="bullet-list">__LANGUAGES__</ul>
+        </section>
+
+        <section class="section">
+          <h3 class="section-title">Key Industries Served</h3>
+          <ul class="bullet-list">__INDUSTRIES__</ul>
+        </section>
+
+        <section class="section">
+          <h3 class="section-title">Education</h3>
+          <ul class="bullet-list">__EDUCATION__</ul>
+        </section>
+      </aside>
     </div>
-    <div class="badge">Cloud(x); CV</div>
-  </div>
 
-  <h2>Resumen</h2>
-  <p>__SUMMARY__</p>
-
-  <h2>Skills</h2>
-  __SKILLS__
-
-  <hr/>
-  <p class="muted">Este CV fue generado automáticamente a partir del PDF original y un resumen asistido por IA.</p>
-  <div class="footer">Template: cloudx-cv-template.html</div>
+    <p class="note">Nota: reemplazá las listas por bloques HTML válidos. Ej.: &lt;li&gt;Java&lt;/li&gt;, &lt;div class="experience-item"&gt;…&lt;/div&gt;</p>
+  </main>
 </body>
 </html>
