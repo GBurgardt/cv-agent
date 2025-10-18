@@ -149,7 +149,6 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
   await fsp.access(absTemplate);
 
   const tempFiles = [];
-  const snapshotFileIds = [];
   let uploadedFileId;
   let lastHtmlPath = workingHtmlPath;
 
@@ -272,9 +271,8 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
             logDetail(`error: ${result.error}`);
           }
           if (result?.image_path) tempFiles.push(result.image_path);
-          if (result?.image_file_id) {
-            snapshotFileIds.push(result.image_file_id);
-            logDetail(`image_file_id: ${result.image_file_id}`);
+          if (result?.image_base64) {
+            logDetail(`preview_base64_length: ${result.image_base64.length}`);
           }
         } else if (name === 'export_resume_pdf') {
           const htmlPath = args?.html_path || lastHtmlPath;
@@ -305,13 +303,21 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
         debugLog('tool-result', { name, result });
         input.push(makeToolOutput(callId, result));
 
-        if (name === 'preview_resume_snapshot' && result?.image_file_id) {
+        if (name === 'preview_resume_snapshot' && result?.image_base64) {
           logAction('Preview ready for review.');
+          if (result?.image_path) {
+            try {
+              await fsp.access(result.image_path);
+            } catch {
+              debugLog('preview-missing-file', result.image_path);
+            }
+          }
+          const dataUrl = `data:image/png;base64,${result.image_base64}`;
           input.push({
             role: 'user',
             content: [
               { type: 'input_text', text: 'Snapshot del CV actual. Revisá el layout y ajustá si hace falta.' },
-              { type: 'input_image', image_file: { file_id: result.image_file_id } },
+              { type: 'input_image', image_url: dataUrl },
             ],
           });
           previousResponseId = response.id;
@@ -354,13 +360,6 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
         await openai.files.del(uploadedFileId);
       } catch (err) {
         debugLog('file-delete-error', err?.message || err);
-      }
-    }
-    for (const snapshotId of snapshotFileIds) {
-      try {
-        await openai.files.del(snapshotId);
-      } catch (err) {
-        debugLog('snapshot-delete-error', err?.message || err);
       }
     }
     for (const tempPath of tempFiles) {
