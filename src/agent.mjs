@@ -2,7 +2,9 @@ import OpenAI from 'openai';
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
-import { renderTemplateToPdf } from './tools/render.mjs';
+import { fillTemplateHtml } from './tools/fillTemplate.mjs';
+import { previewResumeSnapshot } from './tools/previewSnapshot.mjs';
+import { exportResumePdf } from './tools/exportPdf.mjs';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const DEBUG = process.env.CV_AGENT_DEBUG === '1';
@@ -16,16 +18,11 @@ Reglas:
   • SUMMARY: 4–6 líneas (sin emojis, factual, orientado a reclutamiento).
   • SKILLS: top 8–14 habilidades/técnologías deduplicadas (case-insensitive).
   • Opcional: NAME, ROLE si se infiere claramente del CV (ej. primera línea/título).
-- Cuando tengas los campos listos, llamá UNA vez a render_template_pdf(template_path, output_path, fields) con:
-  {
-    "fields": {
-      "SUMMARY": "...",
-      "SKILLS": ["...", "...", ...],
-      "NAME": "...",
-      "ROLE": "..."
-    }
-  }
-- No devuelvas texto final al usuario hasta completar render_template_pdf.
+- Trabajá con estos pasos:
+  1. Usá fill_template_html(template_path, output_html_path, fields) para volcar los datos en el HTML de trabajo.
+  2. Usá preview_resume_snapshot(html_path, image_path?) para generar una vista previa. Revisala; si hay errores, ajustá los campos y repetí.
+  3. Cuando todo esté bien, llamá export_resume_pdf(html_path, output_pdf_path) para producir el PDF final.
+- No devuelvas texto final al usuario hasta completar export_resume_pdf.
 - Tono: conciso, profesional, español neutro, sin emojis.
 
 Si faltan NAME o ROLE, dejalos vacíos. Asegurate de que SKILLS sea una lista de strings simples.
@@ -35,26 +32,50 @@ function toolsDefinition() {
   return [
     {
       type: 'function',
-      name: 'render_template_pdf',
-      description: 'Rellena un HTML template con placeholders y lo exporta a PDF.',
+      name: 'fill_template_html',
+      description: 'Genera un HTML completo reemplazando placeholders por los campos indicados.',
       parameters: {
         type: 'object',
         properties: {
-          template_path: {
-            type: 'string',
-            description: 'Ruta al HTML template.',
-          },
-          output_path: {
-            type: 'string',
-            description: 'Ruta del PDF de salida.',
-          },
+          template_path: { type: 'string', description: 'Ruta del template base (HTML con placeholders).' },
+          output_html_path: { type: 'string', description: 'Ruta donde guardar el HTML de trabajo.' },
           fields: {
             type: 'object',
-            description: 'Mapa de campos a inyectar; ej. SUMMARY, SKILLS, NAME, ROLE.',
+            description: 'Campos a inyectar. Ej: {"SUMMARY": "...", "SKILLS": [...], "NAME": "", "ROLE": ""}.',
             additionalProperties: true,
           },
         },
-        required: ['template_path', 'output_path', 'fields'],
+        required: ['template_path', 'output_html_path', 'fields'],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: 'function',
+      name: 'preview_resume_snapshot',
+      description: 'Genera una captura del HTML actual y la sube para revisión visual.',
+      parameters: {
+        type: 'object',
+        properties: {
+          html_path: { type: 'string', description: 'Ruta al HTML que se quiere previsualizar.' },
+          image_path: { type: 'string', description: 'Ruta donde guardar la captura PNG.' },
+          width: { type: 'integer', description: 'Ancho opcional de viewport en px.' },
+          height: { type: 'integer', description: 'Alto opcional de viewport en px.' },
+        },
+        required: ['html_path'],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: 'function',
+      name: 'export_resume_pdf',
+      description: 'Convierte el HTML final en un PDF definitivo.',
+      parameters: {
+        type: 'object',
+        properties: {
+          html_path: { type: 'string', description: 'Ruta del HTML final.' },
+          output_pdf_path: { type: 'string', description: 'Ruta del PDF a generar.' },
+        },
+        required: ['html_path', 'output_pdf_path'],
         additionalProperties: false,
       },
     },
@@ -112,36 +133,49 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
   const debugLog = (...args) => {
     if (DEBUG) console.log('[cv-agent:debug]', ...args);
   };
+  const logAction = (msg) => console.log(`• ${msg}`);
+  const logDetail = (msg) => console.log(`  └ ${msg}`);
 
   const absCv = path.resolve(cvPath);
   const absOut = path.resolve(outPath);
   const absTemplate = path.resolve(templatePath);
+  const workingHtmlPath = path.resolve(path.dirname(absOut), 'resume-working.html');
+  const previewImagePath = path.resolve(path.dirname(absOut), 'resume-preview.png');
 
   debugLog('start', { cvPath: absCv, outPath: absOut, templatePath: absTemplate, modelOverride: model });
-  console.log('[cv-agent] Generating resume…');
+  logAction('Generating resume…');
 
   await fsp.access(absCv);
   await fsp.access(absTemplate);
 
+  const tempFiles = [];
+  const snapshotFileIds = [];
   let uploadedFileId;
+  let lastHtmlPath = workingHtmlPath;
+
   try {
-    console.log('[cv-agent] Uploading PDF…');
+    logAction('Uploading source PDF…');
     const uploaded = await openai.files.create({
       file: fs.createReadStream(absCv),
       purpose: 'user_data',
     });
     uploadedFileId = uploaded.id;
-    debugLog('file-uploaded', uploadedFileId);
+    logDetail(`file_id: ${uploadedFileId}`);
 
     const input = [
       { role: 'system', content: toInputContent(SYSTEM_PROMPT) },
+      {
+        role: 'system',
+        content: toInputContent(
+          `Paths sugeridos:\n- TEMPLATE_PATH: ${absTemplate}\n- WORKING_HTML_PATH: ${workingHtmlPath}\n- PREVIEW_IMAGE_PATH: ${previewImagePath}\n- OUTPUT_PDF_PATH: ${absOut}\nSeguí el flujo fill_template_html → preview_resume_snapshot → export_resume_pdf.`
+        ),
+      },
       {
         role: 'user',
         content: [
           {
             type: 'input_text',
-            text: `Usá el PDF adjunto para generar el CV final con el template ${absTemplate} y guardalo en ${absOut}. ` +
-              'Analizá el contenido, construí summary, skills, name y role antes de llamar a render_template_pdf.',
+            text: 'Tenés el CV adjunto. Construí el HTML, revisá la vista previa y recién después exportá el PDF final.',
           },
           { type: 'input_file', file_id: uploadedFileId },
         ],
@@ -154,12 +188,12 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
     let previousResponseId;
     let lastResponse = null;
     let finalText = '';
-    let renderSucceeded = false;
-    let lastRenderError = null;
+    let exportSucceeded = false;
+    let lastError = null;
 
     const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS ?? 128000);
 
-    for (let turn = 0; turn < 6; turn += 1) {
+    turnLoop: for (let turn = 0; turn < 8; turn += 1) {
       debugLog('turn', { turn: turn + 1 });
       const response = await openai.responses.create({
         model: modelId,
@@ -175,23 +209,18 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
 
       lastResponse = response;
       const toolCalls = extractToolCalls(response);
-
       debugLog('tool-calls', toolCalls);
 
       if (!toolCalls.length) {
-        finalText = response?.output_text || '';
-        debugLog('no-tool-call', { output: finalText });
+        logAction('Model responded without tool call; reminding about export.');
         input.push({
           role: 'system',
-          content: toInputContent(
-            'Reminder: call render_template_pdf to generate the final PDF before responding.'
-          ),
+          content: toInputContent('Recordá finalizar con export_resume_pdf una vez que la vista previa esté aprobada.'),
         });
         previousResponseId = response.id;
         continue;
       }
 
-      let completed = false;
       for (const call of toolCalls) {
         const { name, call_id: callId } = call;
         let args = {};
@@ -204,23 +233,70 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
         debugLog('tool-exec', { name, args });
 
         let result;
-        if (name === 'render_template_pdf') {
-          if (!args?.fields || typeof args.fields !== 'object') {
-            console.log('[cv-agent] Crafting summary, skills, name and role…');
+
+        if (name === 'fill_template_html') {
+          const templatePathArg = args?.template_path || absTemplate;
+          const outputHtmlPath = args?.output_html_path || workingHtmlPath;
+          logAction('Calling fill_template_html');
+          logDetail(`template_path: ${templatePathArg}`);
+          logDetail(`output_html_path: ${outputHtmlPath}`);
+          try {
+            result = await fillTemplateHtml({
+              templatePath: templatePathArg,
+              outputHtmlPath,
+              fields: args?.fields || {},
+            });
+          } catch (err) {
+            result = { ok: false, error: err?.message || String(err) };
+            logDetail(`error: ${result.error}`);
           }
-          console.log('[cv-agent] Rendering template…');
-          result = await renderTemplateToPdf({
-            templatePath: args?.template_path || absTemplate,
-            outputPath: args?.output_path || absOut,
-            fields: args?.fields || {},
-          });
-          renderSucceeded = !!result?.ok;
-          if (!renderSucceeded) {
-            lastRenderError = result?.error || 'Fallo desconocido al renderizar.';
-          } else {
-            console.log('[cv-agent] Template rendered.');
-            finalText = `PDF generated at ${absOut}`;
-            completed = true;
+          if (result?.html_path) {
+            lastHtmlPath = result.html_path;
+            logDetail(`html_path: ${lastHtmlPath}`);
+          }
+        } else if (name === 'preview_resume_snapshot') {
+          const htmlPath = args?.html_path || lastHtmlPath;
+          const imagePath = args?.image_path || previewImagePath;
+          logAction('Calling preview_resume_snapshot');
+          logDetail(`html_path: ${htmlPath}`);
+          logDetail(`image_path: ${imagePath}`);
+          try {
+            result = await previewResumeSnapshot({
+              htmlPath,
+              imagePath,
+              width: args?.width,
+              height: args?.height,
+            });
+          } catch (err) {
+            result = { ok: false, error: err?.message || String(err) };
+            logDetail(`error: ${result.error}`);
+          }
+          if (result?.image_path) tempFiles.push(result.image_path);
+          if (result?.image_file_id) {
+            snapshotFileIds.push(result.image_file_id);
+            logDetail(`image_file_id: ${result.image_file_id}`);
+          }
+        } else if (name === 'export_resume_pdf') {
+          const htmlPath = args?.html_path || lastHtmlPath;
+          const pdfPath = args?.output_pdf_path || absOut;
+          logAction('Calling export_resume_pdf');
+          logDetail(`html_path: ${htmlPath}`);
+          logDetail(`output_pdf_path: ${pdfPath}`);
+          try {
+            result = await exportResumePdf({ htmlPath, outputPdfPath: pdfPath });
+            exportSucceeded = !!result?.ok;
+            if (!exportSucceeded) {
+              lastError = result?.error || 'Fallo desconocido al exportar.';
+              logDetail(`error: ${lastError}`);
+            } else {
+              finalText = `PDF generated at ${pdfPath}`;
+              logDetail('Export completed.');
+            }
+          } catch (err) {
+            exportSucceeded = false;
+            lastError = err?.message || String(err);
+            result = { ok: false, error: lastError };
+            logDetail(`error: ${lastError}`);
           }
         } else {
           result = { ok: false, error: `Tool desconocida: ${name}` };
@@ -228,31 +304,43 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
 
         debugLog('tool-result', { name, result });
         input.push(makeToolOutput(callId, result));
+
+        if (name === 'preview_resume_snapshot' && result?.image_file_id) {
+          logAction('Preview ready for review.');
+          input.push({
+            role: 'user',
+            content: [
+              { type: 'input_text', text: 'Snapshot del CV actual. Revisá el layout y ajustá si hace falta.' },
+              { type: 'input_image', image_file: { file_id: result.image_file_id } },
+            ],
+          });
+          previousResponseId = response.id;
+          continue turnLoop;
+        }
+
+        if (name === 'export_resume_pdf' && exportSucceeded) {
+          break turnLoop;
+        }
       }
 
       previousResponseId = response.id;
-      if (completed) break;
     }
 
     try {
-      debugLog('render-flag', { renderSucceeded });
+      debugLog('export-status', { exportSucceeded });
       await fsp.access(absOut);
-      debugLog('output-exists', absOut);
     } catch {
-      if (lastRenderError) {
-        throw new Error(`No se generó el PDF de salida: ${lastRenderError}`);
-      }
+      if (lastError) throw new Error(`No se generó el PDF de salida: ${lastError}`);
       throw new Error('No se generó el PDF de salida.');
     }
 
-    if (!renderSucceeded) {
-      debugLog('render-failure', lastRenderError);
-      throw new Error(lastRenderError || 'La herramienta render_template_pdf no completó correctamente.');
+    if (!exportSucceeded) {
+      throw new Error(lastError || 'export_resume_pdf no completó correctamente.');
     }
 
     const finalMessage = finalText || `PDF generated at ${absOut}`;
     debugLog('final-message', finalMessage);
-    console.log(`[cv-agent] Done. PDF generated at ${absOut}`);
+    logAction(`Done. PDF generated at ${absOut}`);
 
     return {
       outputPath: absOut,
@@ -266,6 +354,20 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
         await openai.files.del(uploadedFileId);
       } catch (err) {
         debugLog('file-delete-error', err?.message || err);
+      }
+    }
+    for (const snapshotId of snapshotFileIds) {
+      try {
+        await openai.files.del(snapshotId);
+      } catch (err) {
+        debugLog('snapshot-delete-error', err?.message || err);
+      }
+    }
+    for (const tempPath of tempFiles) {
+      try {
+        await fsp.unlink(tempPath);
+      } catch (err) {
+        debugLog('temp-delete-error', { tempPath, error: err?.message || err });
       }
     }
   }
