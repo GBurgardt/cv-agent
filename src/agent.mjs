@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
-import fs from 'fs/promises';
+import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
-import { readPdfText } from './tools/pdf.mjs';
 import { renderTemplateToPdf } from './tools/render.mjs';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -11,12 +11,12 @@ const SYSTEM_PROMPT = `
 Sos "CV Builder". Objetivo: transformar un CV PDF en un PDF final con un RESUMEN y SKILLS, usando un template HTML.
 
 Reglas:
-- SIEMPRE llamá primero a read_cv_pdf(path) para obtener el texto plano del CV.
+- El PDF del CV ya está adjunto: leelo y usá su contenido para preparar la respuesta.
 - Luego, sintetizá en español neutro:
   • SUMMARY: 4–6 líneas (sin emojis, factual, orientado a reclutamiento).
   • SKILLS: top 8–14 habilidades/técnologías deduplicadas (case-insensitive).
   • Opcional: NAME, ROLE si se infiere claramente del CV (ej. primera línea/título).
-- Después, UNA SOLA llamada a render_template_pdf(template_path, output_path, fields) con:
+- Cuando tengas los campos listos, llamá UNA vez a render_template_pdf(template_path, output_path, fields) con:
   {
     "fields": {
       "SUMMARY": "...",
@@ -29,27 +29,10 @@ Reglas:
 - Tono: conciso, profesional, español neutro, sin emojis.
 
 Si faltan NAME o ROLE, dejalos vacíos. Asegurate de que SKILLS sea una lista de strings simples.
-No intentes responder directamente al usuario hasta haber llamado a read_cv_pdf y render_template_pdf (en ese orden).
 `;
 
 function toolsDefinition() {
   return [
-    {
-      type: 'function',
-      name: 'read_cv_pdf',
-      description: 'Lee texto del archivo PDF de un CV. Retorna { text }.',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: {
-            type: 'string',
-            description: 'Ruta absoluta o relativa al archivo PDF.',
-          },
-        },
-        required: ['path'],
-        additionalProperties: false,
-      },
-    },
     {
       type: 'function',
       name: 'render_template_pdf',
@@ -135,150 +118,155 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
   const absTemplate = path.resolve(templatePath);
 
   debugLog('start', { cvPath: absCv, outPath: absOut, templatePath: absTemplate, modelOverride: model });
-  console.log('[cv-agent] Generando CV…');
+  console.log('[cv-agent] Generating resume…');
 
-  await fs.access(absCv);
-  await fs.access(absTemplate);
+  await fsp.access(absCv);
+  await fsp.access(absTemplate);
 
-  const input = [
-    { role: 'system', content: toInputContent(SYSTEM_PROMPT) },
-    {
-      role: 'user',
-      content: toInputContent(
-        `Procesá este CV PDF en: ${absCv}.
-Usá el template: ${absTemplate}
-El PDF de salida debe ser: ${absOut}`
-      ),
-    },
-  ];
-
-  const tools = toolsDefinition();
-  const modelId = model || process.env.OPENAI_MODEL || 'gpt-5-codex';
-
-  let previousResponseId;
-  let lastResponse = null;
-  let finalText = '';
-  let renderSucceeded = false;
-  let lastRenderError = null;
-  const requiredToolPlan = ['read_cv_pdf', 'render_template_pdf'];
-  let requiredToolIndex = 0;
-
-  const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS ?? 128000);
-  let finalMessageSet = false;
-
-  for (let turn = 0; turn < 6; turn += 1) {
-    const forcedTool = requiredToolPlan[requiredToolIndex] || null;
-    const toolChoiceParam = forcedTool
-      ? { type: 'function', name: forcedTool }
-      : 'auto';
-    debugLog('turn', { turn: turn + 1, toolChoice: toolChoiceParam });
-    if (forcedTool) {
-      console.log(`[cv-agent] Ejecutando ${forcedTool}…`);
-    }
-    const response = await openai.responses.create({
-      model: modelId,
-      input,
-      tools,
-      tool_choice: toolChoiceParam,
-      max_output_tokens: MAX_OUTPUT_TOKENS,
-      reasoning: { effort: 'high', summary: 'auto' },
-      ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
-    });
-
-    debugLog('response', response);
-
-    lastResponse = response;
-    const toolCalls = extractToolCalls(response);
-
-    debugLog('tool-calls', toolCalls);
-
-    if (!toolCalls.length) {
-      finalText = response?.output_text || '';
-      debugLog('no-tool-call', { forcedTool, output: finalText });
-      input.push({
-        role: 'system',
-        content: toInputContent(
-          'Recordatorio: Debes utilizar primero la herramienta read_cv_pdf con el path provisto y luego render_template_pdf para generar el PDF. No entregues respuesta final hasta completar ambas herramientas.'
-        ),
-      });
-      continue;
-    }
-
-    for (const call of toolCalls) {
-      const { name, call_id: callId } = call;
-      let args = {};
-      try {
-        args = typeof call.input === 'string' ? JSON.parse(call.input) : call.input || {};
-      } catch {
-        args = {};
-      }
-
-      debugLog('tool-exec', { name, args });
-
-      let result;
-      if (name === 'read_cv_pdf') {
-        console.log('[cv-agent] Leyendo CV…');
-        result = await readPdfText(args?.path);
-      } else if (name === 'render_template_pdf') {
-        console.log('[cv-agent] Renderizando plantilla…');
-        result = await renderTemplateToPdf({
-          templatePath: args?.template_path || absTemplate,
-          outputPath: args?.output_path || absOut,
-          fields: args?.fields || {},
-        });
-        renderSucceeded = !!result?.ok;
-        if (!renderSucceeded) {
-          lastRenderError = result?.error || 'Fallo desconocido al renderizar.';
-        } else {
-          console.log('[cv-agent] Plantilla renderizada.');
-        }
-      } else {
-        result = { ok: false, error: `Tool desconocida: ${name}` };
-      }
-
-      debugLog('tool-result', { name, result });
-      input.push(makeToolOutput(callId, result));
-
-      if (forcedTool && name === forcedTool && result?.ok) {
-        requiredToolIndex += 1;
-        debugLog('plan-progress', { completed: name, progress: `${requiredToolIndex}/${requiredToolPlan.length}` });
-        if (requiredToolIndex >= requiredToolPlan.length && renderSucceeded) {
-          finalText = `PDF generado correctamente en ${absOut}`;
-          finalMessageSet = true;
-          debugLog('plan-complete');
-          break;
-        }
-      }
-    }
-
-    previousResponseId = response.id;
-    if (finalMessageSet) break;
-  }
-
+  let uploadedFileId;
   try {
-    debugLog('render-flag', { renderSucceeded });
-    await fs.access(absOut);
-    debugLog('output-exists', absOut);
-  } catch {
-    if (lastRenderError) {
-      throw new Error(`No se generó el PDF de salida: ${lastRenderError}`);
+    console.log('[cv-agent] Uploading PDF…');
+    const uploaded = await openai.files.create({
+      file: fs.createReadStream(absCv),
+      purpose: 'user_data',
+    });
+    uploadedFileId = uploaded.id;
+    debugLog('file-uploaded', uploadedFileId);
+
+    const input = [
+      { role: 'system', content: toInputContent(SYSTEM_PROMPT) },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: `Usá el PDF adjunto para generar el CV final con el template ${absTemplate} y guardalo en ${absOut}. ` +
+              'Analizá el contenido, construí summary, skills, name y role antes de llamar a render_template_pdf.',
+          },
+          { type: 'input_file', file_id: uploadedFileId },
+        ],
+      },
+    ];
+
+    const tools = toolsDefinition();
+    const modelId = model || process.env.OPENAI_MODEL || 'gpt-5-codex';
+
+    let previousResponseId;
+    let lastResponse = null;
+    let finalText = '';
+    let renderSucceeded = false;
+    let lastRenderError = null;
+
+    const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS ?? 128000);
+
+    for (let turn = 0; turn < 6; turn += 1) {
+      debugLog('turn', { turn: turn + 1 });
+      const response = await openai.responses.create({
+        model: modelId,
+        input,
+        tools,
+        tool_choice: 'auto',
+        max_output_tokens: MAX_OUTPUT_TOKENS,
+        reasoning: { effort: 'high', summary: 'auto' },
+        ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
+      });
+
+      debugLog('response', response);
+
+      lastResponse = response;
+      const toolCalls = extractToolCalls(response);
+
+      debugLog('tool-calls', toolCalls);
+
+      if (!toolCalls.length) {
+        finalText = response?.output_text || '';
+        debugLog('no-tool-call', { output: finalText });
+        input.push({
+          role: 'system',
+          content: toInputContent(
+            'Reminder: call render_template_pdf to generate the final PDF before responding.'
+          ),
+        });
+        previousResponseId = response.id;
+        continue;
+      }
+
+      let completed = false;
+      for (const call of toolCalls) {
+        const { name, call_id: callId } = call;
+        let args = {};
+        try {
+          args = typeof call.input === 'string' ? JSON.parse(call.input) : call.input || {};
+        } catch {
+          args = {};
+        }
+
+        debugLog('tool-exec', { name, args });
+
+        let result;
+        if (name === 'render_template_pdf') {
+          if (!args?.fields || typeof args.fields !== 'object') {
+            console.log('[cv-agent] Crafting summary, skills, name and role…');
+          }
+          console.log('[cv-agent] Rendering template…');
+          result = await renderTemplateToPdf({
+            templatePath: args?.template_path || absTemplate,
+            outputPath: args?.output_path || absOut,
+            fields: args?.fields || {},
+          });
+          renderSucceeded = !!result?.ok;
+          if (!renderSucceeded) {
+            lastRenderError = result?.error || 'Fallo desconocido al renderizar.';
+          } else {
+            console.log('[cv-agent] Template rendered.');
+            finalText = `PDF generated at ${absOut}`;
+            completed = true;
+          }
+        } else {
+          result = { ok: false, error: `Tool desconocida: ${name}` };
+        }
+
+        debugLog('tool-result', { name, result });
+        input.push(makeToolOutput(callId, result));
+      }
+
+      previousResponseId = response.id;
+      if (completed) break;
     }
-    throw new Error('No se generó el PDF de salida.');
+
+    try {
+      debugLog('render-flag', { renderSucceeded });
+      await fsp.access(absOut);
+      debugLog('output-exists', absOut);
+    } catch {
+      if (lastRenderError) {
+        throw new Error(`No se generó el PDF de salida: ${lastRenderError}`);
+      }
+      throw new Error('No se generó el PDF de salida.');
+    }
+
+    if (!renderSucceeded) {
+      debugLog('render-failure', lastRenderError);
+      throw new Error(lastRenderError || 'La herramienta render_template_pdf no completó correctamente.');
+    }
+
+    const finalMessage = finalText || `PDF generated at ${absOut}`;
+    debugLog('final-message', finalMessage);
+    console.log(`[cv-agent] Done. PDF generated at ${absOut}`);
+
+    return {
+      outputPath: absOut,
+      raw: finalMessage,
+      response: lastResponse,
+    };
+  } finally {
+    if (uploadedFileId) {
+      debugLog('file-delete', uploadedFileId);
+      try {
+        await openai.files.del(uploadedFileId);
+      } catch (err) {
+        debugLog('file-delete-error', err?.message || err);
+      }
+    }
   }
-
-  if (!renderSucceeded) {
-    debugLog('render-failure', lastRenderError);
-    throw new Error(lastRenderError || 'La herramienta render_template_pdf no completó correctamente.');
-  }
-
-  const finalMessage = finalText || `PDF generado correctamente en ${absOut}`;
-  finalText = finalMessage;
-  debugLog('final-message', finalMessage);
-  console.log(`[cv-agent] Listo. PDF generado en ${absOut}`);
-
-  return {
-    outputPath: absOut,
-    raw: finalText,
-    response: lastResponse,
-  };
 }
