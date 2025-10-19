@@ -4,7 +4,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import { fillTemplateHtml } from './tools/fillTemplate.mjs';
 import { previewResumeSnapshot } from './tools/previewSnapshot.mjs';
-import { exportResumePdf } from './tools/exportPdf.mjs';
+import { exportResumeDoc } from './tools/exportDoc.mjs';
 import { generateIterationInsight } from './tools/iterationInsight.mjs';
 import { trimInputToBudget } from './utils/tokenBudget.mjs';
 
@@ -16,7 +16,7 @@ const MODEL_CONTEXT_LIMIT = Number(process.env.MODEL_CONTEXT_LIMIT ?? 200000);
 const CONTEXT_RESERVE_RATIO = Number(process.env.CONTEXT_RESERVE_RATIO ?? 0.6);
 
 const SYSTEM_PROMPT = `
-Sos "CV Builder". Objetivo: transformar un CV PDF en un PDF final con un RESUMEN y SKILLS, usando un template HTML.
+Sos "CV Builder". Objetivo: transformar un CV PDF en un DOC editable final con un RESUMEN y SKILLS, usando un template HTML.
 
 Reglas:
 - El PDF del CV ya está adjunto: leelo y usá su contenido para preparar la respuesta.
@@ -33,9 +33,9 @@ Reglas:
   1. Ejecutá fill_template_html(template_path, output_html_path, fields) para construir el HTML base.
   2. Generá una única vista previa con preview_resume_snapshot(html_path, image_path?). No vas a poder pedir otra captura, así que evaluá cuidadosamente el layout.
   3. Analizá la captura, describí qué hay que ajustar y aplicá exactamente una corrección con fill_template_html. Confirmá en texto los cambios realizados; no habrá otra oportunidad de preview.
-  4. Una vez aplicada la corrección (y sin previews disponibles), describí el estado final y llamá export_resume_pdf(html_path, output_pdf_path) para producir el PDF definitivo. Si aún falta algo, dejalo documentado antes de exportar.
+  4. Una vez aplicada la corrección (y sin previews disponibles), describí el estado final y llamá export_resume_doc(html_path, output_doc_path) para generar el DOC editable definitivo. Si aún falta algo, dejalo documentado antes de exportar.
 - Cada llamada a fill_template_html debe incluir en fields todas las claves del template: SUMMARY, SKILLS, LANGUAGES, INDUSTRIES, EDUCATION, EXPERIENCE, NAME y ROLE (cuando apliquen).
-- No devuelvas texto final al usuario hasta completar export_resume_pdf.
+- No devuelvas texto final al usuario hasta completar export_resume_doc.
 - En cada revisión explicá en texto qué viste en la imagen (qué se ve bien o mal) antes de decidir rellenar nuevamente.
 - Tono: conciso, profesional, español neutro, sin emojis.
 
@@ -81,15 +81,15 @@ function toolsDefinition() {
     },
     {
       type: 'function',
-      name: 'export_resume_pdf',
-      description: 'Convierte el HTML final en un PDF definitivo.',
+      name: 'export_resume_doc',
+      description: 'Genera un archivo DOC editable a partir del HTML final.',
       parameters: {
         type: 'object',
         properties: {
           html_path: { type: 'string', description: 'Ruta del HTML final.' },
-          output_pdf_path: { type: 'string', description: 'Ruta del PDF a generar.' },
+          output_doc_path: { type: 'string', description: 'Ruta del DOC a generar.' },
         },
-        required: ['html_path', 'output_pdf_path'],
+        required: ['html_path', 'output_doc_path'],
         additionalProperties: false,
       },
     },
@@ -259,13 +259,13 @@ function createToolHandlers(context) {
     } else if (state.previewCount >= state.maxPreviews) {
       result = {
         ok: false,
-        error: 'Alcanzaste el límite de previsualizaciones. Exportá el PDF o detallá el problema.',
+        error: 'Alcanzaste el límite de previsualizaciones. Exportá el DOC o detallá el problema.',
       };
       logDetail('correction blocked after reaching preview limit.');
     } else {
       result = {
         ok: false,
-        error: 'Ya aplicaste la corrección permitida. Exportá el PDF o describí el problema.',
+        error: 'Ya aplicaste la corrección permitida. Exportá el DOC o describí el problema.',
       };
       logDetail('additional correction blocked after preview.');
     }
@@ -365,7 +365,7 @@ function createToolHandlers(context) {
     if (state.previewCount === 0) {
       result = {
         ok: false,
-        error: 'Generá al menos una vista previa y revisá el layout antes de exportar el PDF.',
+        error: 'Generá al menos una vista previa y revisá el layout antes de exportar el DOC.',
       };
       logDetail('export blocked: preview missing.');
     } else if (!state.correctionUsed) {
@@ -376,18 +376,18 @@ function createToolHandlers(context) {
       logDetail('export blocked: pending post-preview correction.');
     } else {
       const htmlPath = args?.html_path || state.lastHtmlPath;
-      const pdfPath = args?.output_pdf_path || paths.pdfOut;
-      logAction('Calling export_resume_pdf');
+      const docPath = args?.output_doc_path || paths.docOut;
+      logAction('Calling export_resume_doc');
       logDetail(`html_path: ${htmlPath}`);
-      logDetail(`output_pdf_path: ${pdfPath}`);
+      logDetail(`output_doc_path: ${docPath}`);
       try {
-        result = await exportResumePdf({ htmlPath, outputPdfPath: pdfPath });
+        result = await exportResumeDoc({ htmlPath, outputDocPath: docPath });
         state.exportSucceeded = !!result?.ok;
         if (!state.exportSucceeded) {
           state.lastError = result?.error || 'Fallo desconocido al exportar.';
           logDetail(`error: ${state.lastError}`);
         } else {
-          state.finalText = `PDF generated at ${pdfPath}`;
+          state.finalText = `DOC generated at ${docPath}`;
           logDetail('Export completed.');
         }
       } catch (err) {
@@ -411,7 +411,7 @@ function createToolHandlers(context) {
   return {
     fill_template_html: executeFillTemplate,
     preview_resume_snapshot: executePreview,
-    export_resume_pdf: executeExport,
+    export_resume_doc: executeExport,
   };
 }
 
@@ -449,7 +449,7 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
       {
         role: 'system',
         content: toInputContent(
-          `Paths sugeridos:\n- TEMPLATE_PATH: ${absTemplate}\n- WORKING_HTML_PATH: ${workingHtmlPath}\n- PREVIEW_IMAGE_PATH: ${previewImagePath}\n- OUTPUT_PDF_PATH: ${absOut}\nSeguí el flujo fill_template_html → preview_resume_snapshot → export_resume_pdf.`
+          `Paths sugeridos:\n- TEMPLATE_PATH: ${absTemplate}\n- WORKING_HTML_PATH: ${workingHtmlPath}\n- PREVIEW_IMAGE_PATH: ${previewImagePath}\n- OUTPUT_DOC_PATH: ${absOut}\nSeguí el flujo fill_template_html → preview_resume_snapshot → export_resume_doc.`
         ),
       },
       {
@@ -457,7 +457,7 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
         content: [
           {
             type: 'input_text',
-            text: 'Tenés el CV adjunto. Construí el HTML, revisá la vista previa y recién después exportá el PDF final.',
+            text: 'Tenés el CV adjunto. Construí el HTML, revisá la vista previa y recién después exportá el DOC final.',
           },
           { type: 'input_file', file_id: uploadedFileId },
         ],
@@ -483,7 +483,7 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
       template: absTemplate,
       workingHtml: workingHtmlPath,
       previewImage: previewImagePath,
-      pdfOut: absOut,
+      docOut: absOut,
     };
     const toolHandlers = createToolHandlers({
       logAction,
@@ -557,7 +557,7 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
         logAction('Model responded without tool call; reminding about export.');
         input.push({
           role: 'system',
-          content: toInputContent('Recordá finalizar con export_resume_pdf una vez que la vista previa esté aprobada.'),
+          content: toInputContent('Recordá finalizar con export_resume_doc una vez que la vista previa esté aprobada.'),
         });
         iterationNote = 'Sin tool calls; se envió recordatorio.';
         await appendIterationInsight({ iteration, actions: iterationActions, note: iterationNote });
@@ -633,17 +633,17 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
       debugLog('export-status', { exportSucceeded });
       await fsp.access(absOut);
     } catch {
-      if (agentState.lastError) throw new Error(`No se generó el PDF de salida: ${agentState.lastError}`);
-      throw new Error('No se generó el PDF de salida.');
+      if (agentState.lastError) throw new Error(`No se generó el DOC de salida: ${agentState.lastError}`);
+      throw new Error('No se generó el DOC de salida.');
     }
 
     if (!agentState.exportSucceeded) {
-      throw new Error(agentState.lastError || 'export_resume_pdf no completó correctamente.');
+      throw new Error(agentState.lastError || 'export_resume_doc no completó correctamente.');
     }
 
-    const finalMessage = agentState.finalText || `PDF generated at ${absOut}`;
+    const finalMessage = agentState.finalText || `DOC generated at ${absOut}`;
     debugLog('final-message', finalMessage);
-    logAction(`Done. PDF generated at ${absOut}`);
+    logAction(`Done. DOC generated at ${absOut}`);
 
     return {
       outputPath: absOut,

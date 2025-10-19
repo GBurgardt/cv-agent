@@ -12,8 +12,8 @@ const argv = yargs(hideBin(process.argv))
   })
   .option('out', {
     type: 'string',
-    describe: 'Ruta del PDF de salida',
-    default: './out/output.pdf',
+    describe: 'Ruta del DOC editable de salida',
+    default: './out/output.doc',
   })
   .option('template', {
     type: 'string',
