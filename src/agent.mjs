@@ -22,10 +22,9 @@ Reglas:
 - Tratá cada mensaje que empiece con "Insight iteración" como una instrucción de más alto nivel: si indica revisar o corregir, hacelo antes de decidir la siguiente acción; si ya cumpliste, confirmalo explícitamente en tu razonamiento.
 - Flujo obligatorio y ordenado:
   1. Ejecutá fill_template_html(template_path, output_html_path, fields) para construir el HTML base.
-  2. Generá una vista previa con preview_resume_snapshot(html_path, image_path?). Sólo podés usar esta tool dos veces en total, así que aprovechá la captura para evaluar el layout.
-  3. Después de ver la preview, aplicá exactamente una corrección con fill_template_html (podés reutilizar los mismos datos si no hay cambios, pero confirmá que validaste la vista previa). Sin esta corrección posterior la exportación será rechazada.
-  4. Si aún queda duda podés usar la segunda preview; al agotarlas describí en texto qué sigue faltando.
-  5. Recién cuando la corrección esté aplicada y las instrucciones del insight vigente se cumplan, llamá export_resume_pdf(html_path, output_pdf_path) para producir el PDF final.
+  2. Generá una única vista previa con preview_resume_snapshot(html_path, image_path?). No vas a poder pedir otra captura, así que evaluá cuidadosamente el layout.
+  3. Analizá la captura, describí qué hay que ajustar y aplicá exactamente una corrección con fill_template_html. Confirmá en texto los cambios realizados; no habrá otra oportunidad de preview.
+  4. Una vez aplicada la corrección (y sin previews disponibles), describí el estado final y llamá export_resume_pdf(html_path, output_pdf_path) para producir el PDF definitivo. Si aún falta algo, dejalo documentado antes de exportar.
 - No devuelvas texto final al usuario hasta completar export_resume_pdf.
 - En cada revisión explicá en texto qué viste en la imagen (qué se ve bien o mal) antes de decidir rellenar nuevamente.
 - Tono: conciso, profesional, español neutro, sin emojis.
@@ -195,7 +194,7 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
 
     const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS ?? 128000);
 
-    const MAX_PREVIEWS = 2;
+    const MAX_PREVIEWS = 1;
     let previewCount = 0;
     let initialFillDone = false;
     let correctionUsed = false;
@@ -218,7 +217,7 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
         note,
       };
       iterationHistory.push(summaryEntry);
-      const historySlice = iterationHistory.slice(-5);
+      const historySlice = iterationHistory.slice(-3);
       try {
         const insight = await generateIterationInsight({
           client: openai,
@@ -304,14 +303,14 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
                 'Ya rellenaste el template base. Revisá la vista previa antes de intentar otra corrección.',
             };
             logDetail('second fill before preview blocked.');
+          } else if (!correctionUsed) {
+            correctionUsed = true;
           } else if (previewCount >= MAX_PREVIEWS) {
             result = {
               ok: false,
               error: 'Alcanzaste el límite de previsualizaciones. Exportá el PDF o detallá el problema.',
             };
             logDetail('correction blocked after reaching preview limit.');
-          } else if (!correctionUsed) {
-            correctionUsed = true;
           } else {
             result = {
               ok: false,
@@ -445,10 +444,15 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
             logDetail('maximum previews reached; no more snapshot calls allowed.');
             input.push({
               role: 'system',
-              content: toInputContent('Alcanzaste el límite de correcciones. Continuá con export_resume_pdf o describí el problema en texto.'),
+              content: toInputContent('Ya usaste la única vista previa disponible. Documentá cualquier pendiente en texto y continuá con la exportación.'),
             });
           }
-          await appendIterationInsight({ iteration, actions: iterationActions });
+          const previewNote = correctionUsed
+            ? previewCount >= MAX_PREVIEWS
+              ? 'Vista previa agotada tras la corrección. Documentá el estado y procedé a exportar.'
+              : 'Corrección aplicada; documentá los cambios antes de exportar.'
+            : 'Falta aplicar la corrección posterior a la única vista previa antes de exportar.';
+          await appendIterationInsight({ iteration, actions: iterationActions, note: previewNote });
           previousResponseId = response.id;
           continue turnLoop;
         }
@@ -456,6 +460,20 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
         if (name === 'export_resume_pdf' && exportSucceeded) {
           exitLoop = true;
           break;
+        }
+      }
+
+      if (!iterationNote) {
+        if (exportSucceeded) {
+          iterationNote = 'Export completada; confirmá el cierre y compartí la ruta final.';
+        } else if (previewCount >= MAX_PREVIEWS) {
+          iterationNote = correctionUsed
+            ? 'Única vista previa agotada con corrección aplicada; procedé a exportar.'
+            : 'Única vista previa agotada sin corrección; documentá pendientes antes de exportar.';
+        } else if (previewCount > 0 && !correctionUsed) {
+          iterationNote = 'Corrección posterior a la vista previa aún pendiente.';
+        } else if (!initialFillDone) {
+          iterationNote = 'Generá el HTML base antes de intentar la vista previa.';
         }
       }
 
