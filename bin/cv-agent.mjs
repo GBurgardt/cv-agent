@@ -10,11 +10,11 @@ const argv = yargs(hideBin(process.argv))
     describe: 'Ruta al PDF del CV a procesar',
     demandOption: true,
   })
-  .option('out', {
-    type: 'string',
-    describe: 'Ruta del DOC editable de salida',
-    default: './out/output.doc',
-  })
+.option('out', {
+  type: 'string',
+  describe: 'Ruta del PDF de salida',
+  default: './out/output.pdf',
+})
   .option('template', {
     type: 'string',
     describe: 'Ruta del template HTML a utilizar',
