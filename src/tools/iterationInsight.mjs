@@ -34,9 +34,15 @@ function formatSummaryEntry(entry) {
     ? entry.toolCalls.map(formatToolCall).filter(Boolean).join(', ')
     : 'sin tools';
   const details = [];
-  if (entry.previewCount !== undefined) details.push(`previews ${entry.previewCount}`);
+  if (typeof entry.previewCount === 'number') details.push(`previews ${entry.previewCount}`);
   if (entry.correctionUsed) details.push('corrección aplicada');
-  if (entry.initialFillDone && !entry.correctionUsed) details.push('corrección pendiente');
+  const needsCorrection =
+    entry.initialFillDone &&
+    !entry.correctionUsed &&
+    typeof entry.previewCount === 'number' &&
+    entry.previewCount > 0 &&
+    !entry.exportSucceeded;
+  if (needsCorrection) details.push('corrección pendiente');
   if (entry.exportSucceeded) details.push('export listo');
   if (!entry.exportSucceeded && entry.lastError) {
     details.push(`error: ${trimValue(entry.lastError, 90)}`);

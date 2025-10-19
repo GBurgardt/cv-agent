@@ -19,10 +19,13 @@ Reglas:
   • SUMMARY: 4–6 líneas (sin emojis, factual, orientado a reclutamiento).
   • SKILLS: top 8–14 habilidades/técnologías deduplicadas (case-insensitive).
   • Opcional: NAME, ROLE si se infiere claramente del CV (ej. primera línea/título).
-- Trabajá con estos pasos:
-  1. Usá fill_template_html(template_path, output_html_path, fields) para volcar los datos en el HTML de trabajo.
-  2. Usá preview_resume_snapshot(html_path, image_path?) una sola vez para revisar el layout. Si necesitás ajustar campos hacelo sólo una vez más, justificando qué se ve mal (texto corrido, columnas desalineadas, etc.). Después de la segunda revisión no vuelvas a llamar preview_resume_snapshot.
-  3. Cuando todo esté bien, llamá export_resume_pdf(html_path, output_pdf_path) para producir el PDF final.
+- Tratá cada mensaje que empiece con "Insight iteración" como una instrucción de más alto nivel: si indica revisar o corregir, hacelo antes de decidir la siguiente acción; si ya cumpliste, confirmalo explícitamente en tu razonamiento.
+- Flujo obligatorio y ordenado:
+  1. Ejecutá fill_template_html(template_path, output_html_path, fields) para construir el HTML base.
+  2. Generá una vista previa con preview_resume_snapshot(html_path, image_path?). Sólo podés usar esta tool dos veces en total, así que aprovechá la captura para evaluar el layout.
+  3. Después de ver la preview, aplicá exactamente una corrección con fill_template_html (podés reutilizar los mismos datos si no hay cambios, pero confirmá que validaste la vista previa). Sin esta corrección posterior la exportación será rechazada.
+  4. Si aún queda duda podés usar la segunda preview; al agotarlas describí en texto qué sigue faltando.
+  5. Recién cuando la corrección esté aplicada y las instrucciones del insight vigente se cumplan, llamá export_resume_pdf(html_path, output_pdf_path) para producir el PDF final.
 - No devuelvas texto final al usuario hasta completar export_resume_pdf.
 - En cada revisión explicá en texto qué viste en la imagen (qué se ve bien o mal) antes de decidir rellenar nuevamente.
 - Tono: conciso, profesional, español neutro, sin emojis.
@@ -364,26 +367,41 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
           }
           previewFollowup = { result, args };
         } else if (name === 'export_resume_pdf') {
-          const htmlPath = args?.html_path || lastHtmlPath;
-          const pdfPath = args?.output_pdf_path || absOut;
-          logAction('Calling export_resume_pdf');
-          logDetail(`html_path: ${htmlPath}`);
-          logDetail(`output_pdf_path: ${pdfPath}`);
-          try {
-            result = await exportResumePdf({ htmlPath, outputPdfPath: pdfPath });
-            exportSucceeded = !!result?.ok;
-            if (!exportSucceeded) {
-              lastError = result?.error || 'Fallo desconocido al exportar.';
+          if (previewCount === 0) {
+            result = {
+              ok: false,
+              error: 'Generá al menos una vista previa y revisá el layout antes de exportar el PDF.',
+            };
+            logDetail('export blocked: preview missing.');
+          } else if (!correctionUsed) {
+            result = {
+              ok: false,
+              error:
+                'Aplicá la corrección posterior a la vista previa con fill_template_html antes de exportar.',
+            };
+            logDetail('export blocked: pending post-preview correction.');
+          } else {
+            const htmlPath = args?.html_path || lastHtmlPath;
+            const pdfPath = args?.output_pdf_path || absOut;
+            logAction('Calling export_resume_pdf');
+            logDetail(`html_path: ${htmlPath}`);
+            logDetail(`output_pdf_path: ${pdfPath}`);
+            try {
+              result = await exportResumePdf({ htmlPath, outputPdfPath: pdfPath });
+              exportSucceeded = !!result?.ok;
+              if (!exportSucceeded) {
+                lastError = result?.error || 'Fallo desconocido al exportar.';
+                logDetail(`error: ${lastError}`);
+              } else {
+                finalText = `PDF generated at ${pdfPath}`;
+                logDetail('Export completed.');
+              }
+            } catch (err) {
+              exportSucceeded = false;
+              lastError = err?.message || String(err);
+              result = { ok: false, error: lastError };
               logDetail(`error: ${lastError}`);
-            } else {
-              finalText = `PDF generated at ${pdfPath}`;
-              logDetail('Export completed.');
             }
-          } catch (err) {
-            exportSucceeded = false;
-            lastError = err?.message || String(err);
-            result = { ok: false, error: lastError };
-            logDetail(`error: ${lastError}`);
           }
         } else {
           result = { ok: false, error: `Tool desconocida: ${name}` };
