@@ -1,0 +1,5 @@
+# Aprendizajes recientes (CV Agent)
+
+- Manejo de tokens: la ventana de contexto se saturaba rápido al adjuntar snapshot + historial completo; lo mitigamos estimando tokens y recortando mensajes viejos antes de cada turno. Falta una métrica real para monitorear cuánto consumimos por run.
+- Flujo de vista previa: permitir una sola preview obligó a que el agente documente la corrección y exporte enseguida; reduce el riesgo de loops pero nos deja sin verificación extra si la segunda pasada falla, así que hay que revisar bien la snapshot antes de continuar.
+- Template completo: el HTML original ignoraba sections clave (Skills/Industries/Education/Experience) y ocupaba dos páginas; rediseñar el layout y exigir que el agente rellene todas las claves nos ayudó a detectar huecos en la extracción (todavía falta poblar algunos campos en los datos de origen).***

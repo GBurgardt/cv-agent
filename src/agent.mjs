@@ -9,6 +9,10 @@ import { generateIterationInsight } from './tools/iterationInsight.mjs';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const DEBUG = process.env.CV_AGENT_DEBUG === '1';
+// gpt-5-codex expone un contexto de ~200k tokens según documentación pública:
+// https://github.com/openai/codex/issues/2002
+const MODEL_CONTEXT_LIMIT = Number(process.env.MODEL_CONTEXT_LIMIT ?? 200000);
+const CONTEXT_RESERVE_RATIO = Number(process.env.CONTEXT_RESERVE_RATIO ?? 0.6);
 
 const SYSTEM_PROMPT = `
 Sos "CV Builder". Objetivo: transformar un CV PDF en un PDF final con un RESUMEN y SKILLS, usando un template HTML.
@@ -138,6 +142,67 @@ function toInputContent(text) {
   return text;
 }
 
+function estimateTextTokens(text) {
+  if (!text) return 0;
+  const clean = String(text).replace(/\s+/g, ' ').trim();
+  if (!clean) return 0;
+  return Math.ceil(clean.length / 4);
+}
+
+function extractTextFromContentPart(part) {
+  if (!part) return '';
+  if (typeof part === 'string') return part;
+  if (part.type === 'input_text' || part.type === 'output_text') return part.text || '';
+  if (part.type === 'function_call_output' || part.type === 'tool_output') return part.output || '';
+  if (part.text) return part.text;
+  return '';
+}
+
+function estimateMessageTokens(message) {
+  if (!message) return 0;
+  if (typeof message.content === 'string') {
+    return estimateTextTokens(message.content);
+  }
+  if (Array.isArray(message.content)) {
+    return message.content.reduce((sum, part) => {
+      if (part?.type === 'input_image' || part?.type === 'image') {
+        const imageUrl = typeof part.image_url === 'string'
+          ? part.image_url
+          : typeof part.image_url?.url === 'string'
+            ? part.image_url.url
+            : '';
+        if (!imageUrl) return sum;
+        const base64Segment = imageUrl.includes('base64,')
+          ? imageUrl.split('base64,')[1]
+          : imageUrl;
+        return sum + Math.ceil(base64Segment.length / 4);
+      }
+      return sum + estimateTextTokens(extractTextFromContentPart(part));
+    }, 0);
+  }
+  return estimateTextTokens(message.content?.text || '');
+}
+
+function estimateInputTokens(messages) {
+  if (!Array.isArray(messages)) return 0;
+  return messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
+}
+
+function trimInputToBudget(messages, maxTokens, reserveRatio = 0.75, protectedCount = 3) {
+  if (!Array.isArray(messages) || !Number.isFinite(maxTokens) || maxTokens <= 0) {
+    return { removed: 0, tokens: estimateInputTokens(messages) };
+  }
+  const threshold = Math.floor(maxTokens * reserveRatio);
+  let total = estimateInputTokens(messages);
+  let removed = 0;
+  while (total > threshold && messages.length > protectedCount + 1) {
+    messages.splice(protectedCount, 1);
+    removed += 1;
+    total = estimateInputTokens(messages);
+  }
+  return { removed, tokens: total };
+}
+
 export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
   const debugLog = (...args) => {
     if (DEBUG) console.log('[cv-agent:debug]', ...args);
@@ -245,6 +310,19 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
 turnLoop: for (let turn = 0; turn < 8; turn += 1) {
       const iteration = turn + 1;
       debugLog('turn', { turn: iteration });
+      const { removed: trimmedCount, tokens: approxTokens } = trimInputToBudget(
+        input,
+        MODEL_CONTEXT_LIMIT,
+        CONTEXT_RESERVE_RATIO
+      );
+      const tokenStatus = `${approxTokens}/${MODEL_CONTEXT_LIMIT}`;
+      if (trimmedCount > 0) {
+        logDetail(
+          `context trimmed: removed ${trimmedCount} mensaje(s) antiguo(s), tokens aprox. ${tokenStatus}.`
+        );
+      } else {
+        logDetail(`context tokens aprox.: ${tokenStatus}`);
+      }
       const response = await openai.responses.create({
         model: modelId,
         input,
@@ -412,14 +490,20 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
         }
 
         debugLog('tool-result', { name, result });
-        input.push(makeToolOutput(callId, result));
+        const conversationResult =
+          name === 'preview_resume_snapshot'
+            ? { ...result, image_base64: undefined }
+            : result;
+        input.push(makeToolOutput(callId, conversationResult));
         if (name !== 'preview_resume_snapshot') {
-          iterationActions.push({ name, args, result });
+          iterationActions.push({ name, args, result: conversationResult });
         }
 
         if (previewFollowup) {
           const { result: previewResult } = previewFollowup;
-          iterationActions.push({ name, args, result: previewResult });
+          const actionRecord = { ...previewResult };
+          if (actionRecord.image_base64) actionRecord.image_base64 = '[omitted]';
+          iterationActions.push({ name, args, result: actionRecord });
           if (previewResult?.image_base64) {
             previewCount += 1;
             logDetail(`previews used: ${previewCount} / ${MAX_PREVIEWS}`);

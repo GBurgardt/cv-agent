@@ -12,12 +12,17 @@ export async function previewResumeSnapshot({ htmlPath, imagePath, width, height
 
   const browser = await puppeteer.launch({ headless: 'new' });
   const page = await browser.newPage();
-  if (width || height) {
-    await page.setViewport({ width: width || 1280, height: height || 720 });
-  }
+  const viewportWidth = width || 900;
+  const viewportHeight = height || 1200;
+  await page.setViewport({ width: viewportWidth, height: viewportHeight });
   await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
   await fsp.mkdir(path.dirname(absImage), { recursive: true });
-  await page.screenshot({ path: absImage, fullPage: true });
+  await page.screenshot({
+    path: absImage,
+    type: 'jpeg',
+    quality: 60,
+    fullPage: true,
+  });
   await browser.close();
 
   const buffer = await fsp.readFile(absImage);
