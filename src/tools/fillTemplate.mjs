@@ -8,6 +8,19 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;');
 }
 
+function summaryToHtml(value) {
+  if (!value) return '';
+  const parts = Array.isArray(value) ? value : String(value).split(/\n{2,}/);
+  const segments = parts
+    .map((part) => part && String(part).trim())
+    .filter(Boolean)
+    .map((part) => {
+      const lines = part.split(/\n+/).map((line) => escapeHtml(line));
+      return `<p>${lines.join('<br />')}</p>`;
+    });
+  return segments.join('');
+}
+
 function normalizeListSource(value) {
   if (value == null) return [];
   if (Array.isArray(value)) return value;
@@ -37,13 +50,22 @@ function formatListItems(items, formatter) {
   return html;
 }
 
-function skillsToHtml(skills) {
-  return formatListItems(skills, (skill) => {
-    if (!skill && skill !== 0) return '';
-    const label = typeof skill === 'string' ? skill : skill?.name || skill?.label || '';
-    if (!label) return '';
-    return `<li>${escapeHtml(label)}</li>`;
-  });
+function skillsToInline(skills) {
+  const source = normalizeListSource(skills);
+  if (typeof source === 'string') {
+    return escapeHtml(source.replace(/\s*,\s*/g, ', ').replace(/\s+/g, ' ').trim());
+  }
+  if (!Array.isArray(source) || source.length === 0) return '';
+  const labels = source
+    .map((skill) => {
+      if (!skill && skill !== 0) return '';
+      if (typeof skill === 'string') return skill;
+      return skill?.name || skill?.label || '';
+    })
+    .map((label) => (label ? label.trim() : ''))
+    .filter(Boolean);
+  if (!labels.length) return '';
+  return labels.map((label) => escapeHtml(label)).join(', ');
 }
 
 function languagesToHtml(languages) {
@@ -152,8 +174,8 @@ function experienceToHtml(experiences) {
 
 function applyPlaceholders(html, fields = {}) {
   const replacements = {
-    __SUMMARY__: escapeHtml(fields.SUMMARY || ''),
-    __SKILLS__: skillsToHtml(fields.SKILLS || []),
+    __SUMMARY__: summaryToHtml(fields.SUMMARY || ''),
+    __SKILLS__: skillsToInline(fields.SKILLS || []),
     __NAME__: escapeHtml(fields.NAME || ''),
     __ROLE__: escapeHtml(fields.ROLE || ''),
     __LANGUAGES__: languagesToHtml(fields.LANGUAGES || []),
