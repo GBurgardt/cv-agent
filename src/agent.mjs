@@ -6,6 +6,7 @@ import { fillTemplateHtml } from './tools/fillTemplate.mjs';
 import { previewResumeSnapshot } from './tools/previewSnapshot.mjs';
 import { exportResumePdf } from './tools/exportPdf.mjs';
 import { generateIterationInsight } from './tools/iterationInsight.mjs';
+import { trimInputToBudget } from './utils/tokenBudget.mjs';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const DEBUG = process.env.CV_AGENT_DEBUG === '1';
@@ -142,65 +143,276 @@ function toInputContent(text) {
   return text;
 }
 
-function estimateTextTokens(text) {
-  if (!text) return 0;
-  const clean = String(text).replace(/\s+/g, ' ').trim();
-  if (!clean) return 0;
-  return Math.ceil(clean.length / 4);
+function createAgentState(initialHtmlPath, maxPreviews) {
+  return {
+    previewCount: 0,
+    maxPreviews,
+    initialFillDone: false,
+    correctionUsed: false,
+    lastHtmlPath: initialHtmlPath,
+    exportSucceeded: false,
+    finalText: '',
+    lastError: null,
+  };
 }
 
-function extractTextFromContentPart(part) {
-  if (!part) return '';
-  if (typeof part === 'string') return part;
-  if (part.type === 'input_text' || part.type === 'output_text') return part.text || '';
-  if (part.type === 'function_call_output' || part.type === 'tool_output') return part.output || '';
-  if (part.text) return part.text;
+function ensureContextBudget(messages, logDetail) {
+  const { removed, tokens } = trimInputToBudget(
+    messages,
+    MODEL_CONTEXT_LIMIT,
+    CONTEXT_RESERVE_RATIO
+  );
+  const status = `${tokens}/${MODEL_CONTEXT_LIMIT}`;
+  if (removed > 0) {
+    logDetail(
+      `context trimmed: removed ${removed} mensaje(s) antiguo(s), tokens aprox. ${status}.`
+    );
+  } else {
+    logDetail(`context tokens aprox.: ${status}`);
+  }
+  return { removed, tokens };
+}
+
+function sanitizeSnapshotResult(result) {
+  if (!result || typeof result !== 'object') return result;
+  const sanitized = { ...result };
+  if ('image_base64' in sanitized) sanitized.image_base64 = undefined;
+  return sanitized;
+}
+
+function buildSnapshotMessages(base64, state) {
+  if (!base64) return [];
+  const messages = [
+    {
+      role: 'user',
+      content: [
+        { type: 'input_text', text: 'Snapshot del CV actual. Revisá el layout y ajustá si hace falta.' },
+        { type: 'input_image', image_url: `data:image/jpeg;base64,${base64}` },
+      ],
+    },
+  ];
+  if (state.previewCount >= state.maxPreviews) {
+    messages.push({
+      role: 'system',
+      content: toInputContent(
+        'Ya usaste la única vista previa disponible. Documentá cualquier pendiente en texto y continuá con la exportación.'
+      ),
+    });
+  }
+  return messages;
+}
+
+function derivePreviewNote(state) {
+  if (!state.previewCount) return '';
+  if (!state.correctionUsed) {
+    return 'Falta aplicar la corrección posterior a la única vista previa antes de exportar.';
+  }
+  if (state.previewCount >= state.maxPreviews) {
+    return 'Vista previa agotada tras la corrección. Documentá el estado y procedé a exportar.';
+  }
+  return 'Corrección aplicada; documentá los cambios antes de exportar.';
+}
+
+function deriveIterationNote(state, currentNote) {
+  if (currentNote) return currentNote;
+  if (state.exportSucceeded) {
+    return 'Export completada; confirmá el cierre y compartí la ruta final.';
+  }
+  if (state.previewCount >= state.maxPreviews) {
+    return state.correctionUsed
+      ? 'Única vista previa agotada con corrección aplicada; procedé a exportar.'
+      : 'Única vista previa agotada sin corrección; documentá pendientes antes de exportar.';
+  }
+  if (state.previewCount > 0 && !state.correctionUsed) {
+    return 'Corrección posterior a la vista previa aún pendiente.';
+  }
+  if (!state.initialFillDone) {
+    return 'Generá el HTML base antes de intentar la vista previa.';
+  }
   return '';
 }
 
-function estimateMessageTokens(message) {
-  if (!message) return 0;
-  if (typeof message.content === 'string') {
-    return estimateTextTokens(message.content);
-  }
-  if (Array.isArray(message.content)) {
-    return message.content.reduce((sum, part) => {
-      if (part?.type === 'input_image' || part?.type === 'image') {
-        const imageUrl = typeof part.image_url === 'string'
-          ? part.image_url
-          : typeof part.image_url?.url === 'string'
-            ? part.image_url.url
-            : '';
-        if (!imageUrl) return sum;
-        const base64Segment = imageUrl.includes('base64,')
-          ? imageUrl.split('base64,')[1]
-          : imageUrl;
-        return sum + Math.ceil(base64Segment.length / 4);
+function createToolHandlers(context) {
+  const {
+    logAction,
+    logDetail,
+    paths,
+    tempFiles,
+    state,
+  } = context;
+
+  const executeFillTemplate = async (args = {}) => {
+    const templatePathArg = args?.template_path || paths.template;
+    const outputHtmlPath = args?.output_html_path || paths.workingHtml;
+    let result;
+
+    if (!state.initialFillDone) {
+      state.initialFillDone = true;
+    } else if (state.previewCount === 0) {
+      result = {
+        ok: false,
+        error: 'Ya rellenaste el template base. Revisá la vista previa antes de intentar otra corrección.',
+      };
+      logDetail('second fill before preview blocked.');
+    } else if (!state.correctionUsed) {
+      state.correctionUsed = true;
+    } else if (state.previewCount >= state.maxPreviews) {
+      result = {
+        ok: false,
+        error: 'Alcanzaste el límite de previsualizaciones. Exportá el PDF o detallá el problema.',
+      };
+      logDetail('correction blocked after reaching preview limit.');
+    } else {
+      result = {
+        ok: false,
+        error: 'Ya aplicaste la corrección permitida. Exportá el PDF o describí el problema.',
+      };
+      logDetail('additional correction blocked after preview.');
+    }
+
+    if (!result) {
+      logAction('Calling fill_template_html');
+      logDetail(`template_path: ${templatePathArg}`);
+      logDetail(`output_html_path: ${outputHtmlPath}`);
+      try {
+        result = await fillTemplateHtml({
+          templatePath: templatePathArg,
+          outputHtmlPath,
+          fields: args?.fields || {},
+        });
+      } catch (err) {
+        result = { ok: false, error: err?.message || String(err) };
+        logDetail(`error: ${result.error}`);
       }
-      return sum + estimateTextTokens(extractTextFromContentPart(part));
-    }, 0);
-  }
-  return estimateTextTokens(message.content?.text || '');
-}
+      if (result?.html_path) {
+        state.lastHtmlPath = result.html_path;
+        logDetail(`html_path: ${state.lastHtmlPath}`);
+      }
+    }
 
-function estimateInputTokens(messages) {
-  if (!Array.isArray(messages)) return 0;
-  return messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
-}
+    return {
+      conversationResult: result,
+      recordResult: result,
+      extraMessages: [],
+      continueLoop: false,
+      exitLoop: false,
+      note: '',
+    };
+  };
 
-function trimInputToBudget(messages, maxTokens, reserveRatio = 0.75, protectedCount = 3) {
-  if (!Array.isArray(messages) || !Number.isFinite(maxTokens) || maxTokens <= 0) {
-    return { removed: 0, tokens: estimateInputTokens(messages) };
-  }
-  const threshold = Math.floor(maxTokens * reserveRatio);
-  let total = estimateInputTokens(messages);
-  let removed = 0;
-  while (total > threshold && messages.length > protectedCount + 1) {
-    messages.splice(protectedCount, 1);
-    removed += 1;
-    total = estimateInputTokens(messages);
-  }
-  return { removed, tokens: total };
+  const executePreview = async (args = {}) => {
+    let result;
+    if (state.previewCount >= state.maxPreviews) {
+      logDetail('preview limit reached; preview_resume_snapshot skipped.');
+      result = { ok: false, error: 'Límite de previsualizaciones alcanzado.' };
+    } else {
+      const htmlPath = args?.html_path || state.lastHtmlPath;
+      const imagePath = args?.image_path || paths.previewImage;
+      logAction('Calling preview_resume_snapshot');
+      logDetail(`html_path: ${htmlPath}`);
+      logDetail(`image_path: ${imagePath}`);
+      try {
+        result = await previewResumeSnapshot({
+          htmlPath,
+          imagePath,
+          width: args?.width,
+          height: args?.height,
+        });
+      } catch (err) {
+        result = { ok: false, error: err?.message || String(err) };
+        logDetail(`error: ${result.error}`);
+      }
+      if (result?.image_path) tempFiles.push(result.image_path);
+      if (result?.image_base64) {
+        logDetail(`preview_base64_length: ${result.image_base64.length}`);
+      }
+    }
+
+    const sanitized = sanitizeSnapshotResult(result);
+    const recordResult = sanitizeSnapshotResult(result);
+    const extraMessages = [];
+    let note = '';
+    let continueLoop = false;
+
+    if (result?.image_base64) {
+      state.previewCount += 1;
+      logDetail(`previews used: ${state.previewCount} / ${state.maxPreviews}`);
+      logAction('Preview ready for review.');
+      try {
+        if (result?.image_path) {
+          await fsp.access(result.image_path);
+        }
+      } catch {
+        logDetail('preview image missing on disk (ignorado).');
+      }
+      extraMessages.push(...buildSnapshotMessages(result.image_base64, state));
+      note = derivePreviewNote(state);
+      continueLoop = true;
+    }
+
+    return {
+      conversationResult: sanitized,
+      recordResult,
+      extraMessages,
+      continueLoop,
+      exitLoop: false,
+      note,
+    };
+  };
+
+  const executeExport = async (args = {}) => {
+    let result;
+    if (state.previewCount === 0) {
+      result = {
+        ok: false,
+        error: 'Generá al menos una vista previa y revisá el layout antes de exportar el PDF.',
+      };
+      logDetail('export blocked: preview missing.');
+    } else if (!state.correctionUsed) {
+      result = {
+        ok: false,
+        error: 'Aplicá la corrección posterior a la vista previa con fill_template_html antes de exportar.',
+      };
+      logDetail('export blocked: pending post-preview correction.');
+    } else {
+      const htmlPath = args?.html_path || state.lastHtmlPath;
+      const pdfPath = args?.output_pdf_path || paths.pdfOut;
+      logAction('Calling export_resume_pdf');
+      logDetail(`html_path: ${htmlPath}`);
+      logDetail(`output_pdf_path: ${pdfPath}`);
+      try {
+        result = await exportResumePdf({ htmlPath, outputPdfPath: pdfPath });
+        state.exportSucceeded = !!result?.ok;
+        if (!state.exportSucceeded) {
+          state.lastError = result?.error || 'Fallo desconocido al exportar.';
+          logDetail(`error: ${state.lastError}`);
+        } else {
+          state.finalText = `PDF generated at ${pdfPath}`;
+          logDetail('Export completed.');
+        }
+      } catch (err) {
+        state.exportSucceeded = false;
+        state.lastError = err?.message || String(err);
+        result = { ok: false, error: state.lastError };
+        logDetail(`error: ${state.lastError}`);
+      }
+    }
+
+    return {
+      conversationResult: result,
+      recordResult: result,
+      extraMessages: [],
+      continueLoop: false,
+      exitLoop: state.exportSucceeded,
+      note: '',
+    };
+  };
+
+  return {
+    fill_template_html: executeFillTemplate,
+    preview_resume_snapshot: executePreview,
+    export_resume_pdf: executeExport,
+  };
 }
 
 export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
@@ -222,7 +434,6 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
 
   const tempFiles = [];
   let uploadedFileId;
-  let lastHtmlPath = workingHtmlPath;
 
   try {
     logAction('Uploading source PDF…');
@@ -265,11 +476,22 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
     const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS ?? 128000);
 
     const MAX_PREVIEWS = 1;
-    let previewCount = 0;
-    let initialFillDone = false;
-    let correctionUsed = false;
+    const agentState = createAgentState(workingHtmlPath, MAX_PREVIEWS);
     const iterationHistory = [];
     const insightModelId = process.env.OPENAI_INSIGHT_MODEL || modelId;
+    const paths = {
+      template: absTemplate,
+      workingHtml: workingHtmlPath,
+      previewImage: previewImagePath,
+      pdfOut: absOut,
+    };
+    const toolHandlers = createToolHandlers({
+      logAction,
+      logDetail,
+      paths,
+      tempFiles,
+      state: agentState,
+    });
 
     const appendIterationInsight = async ({ iteration, actions, note }) => {
       const summaryEntry = {
@@ -279,11 +501,11 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
           ok: result?.ok !== false,
           error: result?.error,
         })),
-        previewCount,
-        initialFillDone,
-        correctionUsed,
-        exportSucceeded,
-        lastError,
+        previewCount: agentState.previewCount,
+        initialFillDone: agentState.initialFillDone,
+        correctionUsed: agentState.correctionUsed,
+        exportSucceeded: agentState.exportSucceeded,
+        lastError: agentState.lastError,
         note,
       };
       iterationHistory.push(summaryEntry);
@@ -310,19 +532,7 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
 turnLoop: for (let turn = 0; turn < 8; turn += 1) {
       const iteration = turn + 1;
       debugLog('turn', { turn: iteration });
-      const { removed: trimmedCount, tokens: approxTokens } = trimInputToBudget(
-        input,
-        MODEL_CONTEXT_LIMIT,
-        CONTEXT_RESERVE_RATIO
-      );
-      const tokenStatus = `${approxTokens}/${MODEL_CONTEXT_LIMIT}`;
-      if (trimmedCount > 0) {
-        logDetail(
-          `context trimmed: removed ${trimmedCount} mensaje(s) antiguo(s), tokens aprox. ${tokenStatus}.`
-        );
-      } else {
-        logDetail(`context tokens aprox.: ${tokenStatus}`);
-      }
+      ensureContextBudget(input, logDetail);
       const response = await openai.responses.create({
         model: modelId,
         input,
@@ -370,202 +580,49 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
         }
 
         debugLog('tool-exec', { name, args });
-
-        let result;
-        let previewFollowup = null;
-
-        if (name === 'fill_template_html') {
-          const templatePathArg = args?.template_path || absTemplate;
-          const outputHtmlPath = args?.output_html_path || workingHtmlPath;
-          if (!initialFillDone) {
-            initialFillDone = true;
-          } else if (previewCount === 0) {
-            result = {
-              ok: false,
-              error:
-                'Ya rellenaste el template base. Revisá la vista previa antes de intentar otra corrección.',
-            };
-            logDetail('second fill before preview blocked.');
-          } else if (!correctionUsed) {
-            correctionUsed = true;
-          } else if (previewCount >= MAX_PREVIEWS) {
-            result = {
-              ok: false,
-              error: 'Alcanzaste el límite de previsualizaciones. Exportá el PDF o detallá el problema.',
-            };
-            logDetail('correction blocked after reaching preview limit.');
-          } else {
-            result = {
-              ok: false,
-              error: 'Ya aplicaste la corrección permitida. Exportá el PDF o describí el problema.',
-            };
-            logDetail('additional correction blocked after preview.');
-          }
-
-          if (!result) {
-            logAction('Calling fill_template_html');
-            logDetail(`template_path: ${templatePathArg}`);
-            logDetail(`output_html_path: ${outputHtmlPath}`);
-            try {
-              result = await fillTemplateHtml({
-                templatePath: templatePathArg,
-                outputHtmlPath,
-                fields: args?.fields || {},
-              });
-            } catch (err) {
-              result = { ok: false, error: err?.message || String(err) };
-              logDetail(`error: ${result.error}`);
-            }
-            if (result?.html_path) {
-              lastHtmlPath = result.html_path;
-              logDetail(`html_path: ${lastHtmlPath}`);
-            }
-          }
-        } else if (name === 'preview_resume_snapshot') {
-          if (previewCount >= MAX_PREVIEWS) {
-            logDetail('preview limit reached; preview_resume_snapshot skipped.');
-            result = { ok: false, error: 'Límite de previsualizaciones alcanzado.' };
-          } else {
-            const htmlPath = args?.html_path || lastHtmlPath;
-            const imagePath = args?.image_path || previewImagePath;
-            logAction('Calling preview_resume_snapshot');
-            logDetail(`html_path: ${htmlPath}`);
-            logDetail(`image_path: ${imagePath}`);
-            try {
-              result = await previewResumeSnapshot({
-                htmlPath,
-                imagePath,
-                width: args?.width,
-                height: args?.height,
-              });
-            } catch (err) {
-              result = { ok: false, error: err?.message || String(err) };
-              logDetail(`error: ${result.error}`);
-            }
-            if (result?.image_path) tempFiles.push(result.image_path);
-            if (result?.image_base64) {
-              logDetail(`preview_base64_length: ${result.image_base64.length}`);
-            }
-          }
-          previewFollowup = { result, args };
-        } else if (name === 'export_resume_pdf') {
-          if (previewCount === 0) {
-            result = {
-              ok: false,
-              error: 'Generá al menos una vista previa y revisá el layout antes de exportar el PDF.',
-            };
-            logDetail('export blocked: preview missing.');
-          } else if (!correctionUsed) {
-            result = {
-              ok: false,
-              error:
-                'Aplicá la corrección posterior a la vista previa con fill_template_html antes de exportar.',
-            };
-            logDetail('export blocked: pending post-preview correction.');
-          } else {
-            const htmlPath = args?.html_path || lastHtmlPath;
-            const pdfPath = args?.output_pdf_path || absOut;
-            logAction('Calling export_resume_pdf');
-            logDetail(`html_path: ${htmlPath}`);
-            logDetail(`output_pdf_path: ${pdfPath}`);
-            try {
-              result = await exportResumePdf({ htmlPath, outputPdfPath: pdfPath });
-              exportSucceeded = !!result?.ok;
-              if (!exportSucceeded) {
-                lastError = result?.error || 'Fallo desconocido al exportar.';
-                logDetail(`error: ${lastError}`);
-              } else {
-                finalText = `PDF generated at ${pdfPath}`;
-                logDetail('Export completed.');
-              }
-            } catch (err) {
-              exportSucceeded = false;
-              lastError = err?.message || String(err);
-              result = { ok: false, error: lastError };
-              logDetail(`error: ${lastError}`);
-            }
-          }
+        const handler = toolHandlers[name];
+        let outcome;
+        if (handler) {
+          outcome = await handler(args);
         } else {
-          result = { ok: false, error: `Tool desconocida: ${name}` };
+          const fallback = { ok: false, error: `Tool desconocida: ${name}` };
+          outcome = {
+            conversationResult: fallback,
+            recordResult: fallback,
+            extraMessages: [],
+            continueLoop: false,
+            exitLoop: false,
+            note: '',
+          };
         }
 
-        debugLog('tool-result', { name, result });
-        const conversationResult =
-          name === 'preview_resume_snapshot'
-            ? { ...result, image_base64: undefined }
-            : result;
+        const conversationResult = outcome.conversationResult ?? { ok: false };
         input.push(makeToolOutput(callId, conversationResult));
-        if (name !== 'preview_resume_snapshot') {
-          iterationActions.push({ name, args, result: conversationResult });
+        if (outcome.recordResult) {
+          iterationActions.push({ name, args, result: outcome.recordResult });
+        }
+        if (Array.isArray(outcome.extraMessages) && outcome.extraMessages.length > 0) {
+          for (const msg of outcome.extraMessages) {
+            input.push(msg);
+          }
+        }
+        if (outcome.note) {
+          iterationNote = outcome.note;
         }
 
-        if (previewFollowup) {
-          const { result: previewResult } = previewFollowup;
-          const actionRecord = { ...previewResult };
-          if (actionRecord.image_base64) actionRecord.image_base64 = '[omitted]';
-          iterationActions.push({ name, args, result: actionRecord });
-          if (previewResult?.image_base64) {
-            previewCount += 1;
-            logDetail(`previews used: ${previewCount} / ${MAX_PREVIEWS}`);
-            logAction('Preview ready for review.');
-            try {
-              if (previewResult?.image_path) {
-                await fsp.access(previewResult.image_path);
-              }
-            } catch {
-              debugLog('preview-missing-file', previewResult?.image_path);
-            }
-          }
-          const snapshotContent = [
-            { type: 'input_text', text: 'Snapshot del CV actual. Revisá el layout y ajustá si hace falta.' },
-          ];
-          if (previewResult?.image_base64) {
-            snapshotContent.push({
-              type: 'input_image',
-              image_url: `data:image/png;base64,${previewResult.image_base64}`,
-            });
-          }
-          input.push({
-            role: 'user',
-            content: snapshotContent,
-          });
-          if (previewCount >= MAX_PREVIEWS) {
-            logDetail('maximum previews reached; no more snapshot calls allowed.');
-            input.push({
-              role: 'system',
-              content: toInputContent('Ya usaste la única vista previa disponible. Documentá cualquier pendiente en texto y continuá con la exportación.'),
-            });
-          }
-          const previewNote = correctionUsed
-            ? previewCount >= MAX_PREVIEWS
-              ? 'Vista previa agotada tras la corrección. Documentá el estado y procedé a exportar.'
-              : 'Corrección aplicada; documentá los cambios antes de exportar.'
-            : 'Falta aplicar la corrección posterior a la única vista previa antes de exportar.';
-          await appendIterationInsight({ iteration, actions: iterationActions, note: previewNote });
+        if (outcome.continueLoop) {
+          await appendIterationInsight({ iteration, actions: iterationActions, note: iterationNote });
           previousResponseId = response.id;
           continue turnLoop;
         }
 
-        if (name === 'export_resume_pdf' && exportSucceeded) {
+        if (outcome.exitLoop) {
           exitLoop = true;
           break;
         }
       }
 
-      if (!iterationNote) {
-        if (exportSucceeded) {
-          iterationNote = 'Export completada; confirmá el cierre y compartí la ruta final.';
-        } else if (previewCount >= MAX_PREVIEWS) {
-          iterationNote = correctionUsed
-            ? 'Única vista previa agotada con corrección aplicada; procedé a exportar.'
-            : 'Única vista previa agotada sin corrección; documentá pendientes antes de exportar.';
-        } else if (previewCount > 0 && !correctionUsed) {
-          iterationNote = 'Corrección posterior a la vista previa aún pendiente.';
-        } else if (!initialFillDone) {
-          iterationNote = 'Generá el HTML base antes de intentar la vista previa.';
-        }
-      }
-
+      iterationNote = deriveIterationNote(agentState, iterationNote);
       await appendIterationInsight({ iteration, actions: iterationActions, note: iterationNote });
 
       previousResponseId = response.id;
@@ -576,15 +633,15 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
       debugLog('export-status', { exportSucceeded });
       await fsp.access(absOut);
     } catch {
-      if (lastError) throw new Error(`No se generó el PDF de salida: ${lastError}`);
+      if (agentState.lastError) throw new Error(`No se generó el PDF de salida: ${agentState.lastError}`);
       throw new Error('No se generó el PDF de salida.');
     }
 
-    if (!exportSucceeded) {
-      throw new Error(lastError || 'export_resume_pdf no completó correctamente.');
+    if (!agentState.exportSucceeded) {
+      throw new Error(agentState.lastError || 'export_resume_pdf no completó correctamente.');
     }
 
-    const finalMessage = finalText || `PDF generated at ${absOut}`;
+    const finalMessage = agentState.finalText || `PDF generated at ${absOut}`;
     debugLog('final-message', finalMessage);
     logAction(`Done. PDF generated at ${absOut}`);
 
