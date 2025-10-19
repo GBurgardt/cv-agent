@@ -5,15 +5,10 @@ import path from 'path';
 import { fillTemplateHtml } from './tools/fillTemplate.mjs';
 import { previewResumeSnapshot } from './tools/previewSnapshot.mjs';
 import { exportResumePdf } from './tools/exportPdf.mjs';
+import { generateIterationInsight } from './tools/iterationInsight.mjs';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const DEBUG = process.env.CV_AGENT_DEBUG === '1';
-
-function truncate(text, max = 280) {
-  if (!text) return '';
-  const clean = text.replace(/\s+/g, ' ').trim();
-  return clean.length <= max ? clean : `${clean.slice(0, max - 1)}…`;
-}
 
 const SYSTEM_PROMPT = `
 Sos "CV Builder". Objetivo: transformar un CV PDF en un PDF final con un RESUMEN y SKILLS, usando un template HTML.
@@ -136,33 +131,6 @@ function toInputContent(text) {
   return text;
 }
 
-function extractModelObservation(resp) {
-  const snippets = [];
-  const outputs = resp?.output || [];
-  try {
-    for (const block of outputs) {
-      if (!block) continue;
-      if (block.type === 'reasoning') {
-        if (Array.isArray(block.summary)) {
-          for (const item of block.summary) {
-            if (item?.type === 'summary_text' && item.text) snippets.push(item.text);
-          }
-        }
-        if (typeof block.text === 'string' && block.text.trim()) snippets.push(block.text);
-      } else if (block.type === 'message') {
-        const content = block.content || [];
-        for (const part of content) {
-          if (typeof part?.text === 'string' && part.text.trim()) snippets.push(part.text);
-          if (part?.type === 'output_text' && part.text) snippets.push(part.text);
-        }
-      }
-    }
-  } catch (err) {
-    if (DEBUG) console.warn('[cv-agent:debug] observation parse error:', err?.message || err);
-  }
-  return snippets.map((s) => s.trim()).filter(Boolean).join(' ').trim();
-}
-
 export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
   const debugLog = (...args) => {
     if (DEBUG) console.log('[cv-agent:debug]', ...args);
@@ -177,8 +145,6 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
   const previewImagePath = path.resolve(path.dirname(absOut), 'resume-preview.png');
 
   debugLog('start', { cvPath: absCv, outPath: absOut, templatePath: absTemplate, modelOverride: model });
-  logAction('Generating resume…');
-
   await fsp.access(absCv);
   await fsp.access(absTemplate);
 
@@ -228,8 +194,50 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
 
     const MAX_PREVIEWS = 2;
     let previewCount = 0;
+    let initialFillDone = false;
+    let correctionUsed = false;
+    const iterationHistory = [];
+    const insightModelId = process.env.OPENAI_INSIGHT_MODEL || modelId;
+
+    const appendIterationInsight = async ({ iteration, actions, note }) => {
+      const summaryEntry = {
+        iteration,
+        toolCalls: (actions || []).map(({ name, result }) => ({
+          name,
+          ok: result?.ok !== false,
+          error: result?.error,
+        })),
+        previewCount,
+        initialFillDone,
+        correctionUsed,
+        exportSucceeded,
+        lastError,
+        note,
+      };
+      iterationHistory.push(summaryEntry);
+      const historySlice = iterationHistory.slice(-5);
+      try {
+        const insight = await generateIterationInsight({
+          client: openai,
+          model: insightModelId,
+          history: historySlice,
+        });
+        if (insight) {
+          logAction(`Insight iteración ${iteration}`);
+          logDetail(insight);
+          input.push({
+            role: 'system',
+            content: toInputContent(`Insight iteración ${iteration}: ${insight}`),
+          });
+        }
+      } catch (err) {
+        debugLog('insight-error', err?.message || err);
+      }
+    };
+
 turnLoop: for (let turn = 0; turn < 8; turn += 1) {
-      debugLog('turn', { turn: turn + 1 });
+      const iteration = turn + 1;
+      debugLog('turn', { turn: iteration });
       const response = await openai.responses.create({
         model: modelId,
         input,
@@ -241,24 +249,31 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
       });
 
       debugLog('response', response);
-      const observation = extractModelObservation(response);
-      if (observation) {
-        logDetail(`model: ${truncate(observation)}`);
-      }
-
       lastResponse = response;
       const toolCalls = extractToolCalls(response);
       debugLog('tool-calls', toolCalls);
 
+      const iterationActions = [];
+      let iterationNote = '';
+      let exitLoop = false;
+
       if (!toolCalls.length) {
+        logAction(`Iteration ${iteration}: no tool calls received.`);
         logAction('Model responded without tool call; reminding about export.');
         input.push({
           role: 'system',
           content: toInputContent('Recordá finalizar con export_resume_pdf una vez que la vista previa esté aprobada.'),
         });
+        iterationNote = 'Sin tool calls; se envió recordatorio.';
+        await appendIterationInsight({ iteration, actions: iterationActions, note: iterationNote });
         previousResponseId = response.id;
         continue;
       }
+
+      logAction(`Iteration ${iteration}: model requested ${toolCalls.length} tool call(s).`);
+      toolCalls.forEach((call, idx) => {
+        logDetail(`tool[${idx + 1}]: ${call.name}`);
+      });
 
       for (const call of toolCalls) {
         const { name, call_id: callId } = call;
@@ -272,14 +287,37 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
         debugLog('tool-exec', { name, args });
 
         let result;
+        let previewFollowup = null;
 
         if (name === 'fill_template_html') {
-          if (previewCount >= MAX_PREVIEWS) {
-            logDetail('preview limit reached; fill_template_html skipped.');
-            result = { ok: false, error: 'Límite de correcciones alcanzado.' };
+          const templatePathArg = args?.template_path || absTemplate;
+          const outputHtmlPath = args?.output_html_path || workingHtmlPath;
+          if (!initialFillDone) {
+            initialFillDone = true;
+          } else if (previewCount === 0) {
+            result = {
+              ok: false,
+              error:
+                'Ya rellenaste el template base. Revisá la vista previa antes de intentar otra corrección.',
+            };
+            logDetail('second fill before preview blocked.');
+          } else if (previewCount >= MAX_PREVIEWS) {
+            result = {
+              ok: false,
+              error: 'Alcanzaste el límite de previsualizaciones. Exportá el PDF o detallá el problema.',
+            };
+            logDetail('correction blocked after reaching preview limit.');
+          } else if (!correctionUsed) {
+            correctionUsed = true;
           } else {
-            const templatePathArg = args?.template_path || absTemplate;
-            const outputHtmlPath = args?.output_html_path || workingHtmlPath;
+            result = {
+              ok: false,
+              error: 'Ya aplicaste la corrección permitida. Exportá el PDF o describí el problema.',
+            };
+            logDetail('additional correction blocked after preview.');
+          }
+
+          if (!result) {
             logAction('Calling fill_template_html');
             logDetail(`template_path: ${templatePathArg}`);
             logDetail(`output_html_path: ${outputHtmlPath}`);
@@ -324,6 +362,7 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
               logDetail(`preview_base64_length: ${result.image_base64.length}`);
             }
           }
+          previewFollowup = { result, args };
         } else if (name === 'export_resume_pdf') {
           const htmlPath = args?.html_path || lastHtmlPath;
           const pdfPath = args?.output_pdf_path || absOut;
@@ -352,25 +391,37 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
 
         debugLog('tool-result', { name, result });
         input.push(makeToolOutput(callId, result));
+        if (name !== 'preview_resume_snapshot') {
+          iterationActions.push({ name, args, result });
+        }
 
-        if (name === 'preview_resume_snapshot' && result?.image_base64) {
-          previewCount += 1;
-          logDetail(`previews used: ${previewCount} / ${MAX_PREVIEWS}`);
-          logAction('Preview ready for review.');
-          if (result?.image_path) {
+        if (previewFollowup) {
+          const { result: previewResult } = previewFollowup;
+          iterationActions.push({ name, args, result: previewResult });
+          if (previewResult?.image_base64) {
+            previewCount += 1;
+            logDetail(`previews used: ${previewCount} / ${MAX_PREVIEWS}`);
+            logAction('Preview ready for review.');
             try {
-              await fsp.access(result.image_path);
+              if (previewResult?.image_path) {
+                await fsp.access(previewResult.image_path);
+              }
             } catch {
-              debugLog('preview-missing-file', result.image_path);
+              debugLog('preview-missing-file', previewResult?.image_path);
             }
           }
-          const dataUrl = `data:image/png;base64,${result.image_base64}`;
+          const snapshotContent = [
+            { type: 'input_text', text: 'Snapshot del CV actual. Revisá el layout y ajustá si hace falta.' },
+          ];
+          if (previewResult?.image_base64) {
+            snapshotContent.push({
+              type: 'input_image',
+              image_url: `data:image/png;base64,${previewResult.image_base64}`,
+            });
+          }
           input.push({
             role: 'user',
-            content: [
-              { type: 'input_text', text: 'Snapshot del CV actual. Revisá el layout y ajustá si hace falta.' },
-              { type: 'input_image', image_url: dataUrl },
-            ],
+            content: snapshotContent,
           });
           if (previewCount >= MAX_PREVIEWS) {
             logDetail('maximum previews reached; no more snapshot calls allowed.');
@@ -379,16 +430,21 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
               content: toInputContent('Alcanzaste el límite de correcciones. Continuá con export_resume_pdf o describí el problema en texto.'),
             });
           }
+          await appendIterationInsight({ iteration, actions: iterationActions });
           previousResponseId = response.id;
           continue turnLoop;
         }
 
         if (name === 'export_resume_pdf' && exportSucceeded) {
-          break turnLoop;
+          exitLoop = true;
+          break;
         }
       }
 
+      await appendIterationInsight({ iteration, actions: iterationActions, note: iterationNote });
+
       previousResponseId = response.id;
+      if (exitLoop) break;
     }
 
     try {
