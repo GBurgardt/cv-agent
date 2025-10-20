@@ -1,15 +1,15 @@
-import OpenAI from 'openai';
-import fs from 'fs';
-import fsp from 'fs/promises';
-import path from 'path';
-import { fillTemplateHtml } from './tools/fillTemplate.mjs';
-import { previewResumeSnapshot } from './tools/previewSnapshot.mjs';
-import { exportResumePdf } from './tools/exportPdf.mjs';
-import { generateIterationInsight } from './tools/iterationInsight.mjs';
-import { trimInputToBudget } from './utils/tokenBudget.mjs';
+import OpenAI from "openai";
+import fs from "fs";
+import fsp from "fs/promises";
+import path from "path";
+import { fillTemplateHtml } from "./tools/fillTemplate.mjs";
+import { previewResumeSnapshot } from "./tools/previewSnapshot.mjs";
+import { exportResumePdf } from "./tools/exportPdf.mjs";
+import { generateIterationInsight } from "./tools/iterationInsight.mjs";
+import { trimInputToBudget } from "./utils/tokenBudget.mjs";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const DEBUG = process.env.CV_AGENT_DEBUG === '1';
+const DEBUG = process.env.CV_AGENT_DEBUG === "1";
 // gpt-5-codex expone un contexto de ~200k tokens según documentación pública:
 // https://github.com/openai/codex/issues/2002
 const MODEL_CONTEXT_LIMIT = Number(process.env.MODEL_CONTEXT_LIMIT ?? 200000);
@@ -21,8 +21,8 @@ Sos "CV Builder". Objetivo: transformar un CV PDF en un PDF final con un RESUMEN
 Reglas:
 - El PDF del CV ya está adjunto: leelo y usá su contenido para preparar la respuesta.
 - Luego, sintetizá en español neutro:
-  • SUMMARY: 4–6 líneas (sin emojis, factual, orientado a reclutamiento).
-  • SKILLS: top 8–14 habilidades/técnologías deduplicadas (case-insensitive) en un listado plano.
+  • SUMMARY: 4-6 líneas (sin emojis, factual, orientado a reclutamiento).
+  • SKILLS: top 8-14 habilidades/técnologías deduplicadas (case-insensitive) en un listado plano.
   • LANGUAGES: lista de idiomas con nivel (ej. Español — Nativo).
   • KEY INDUSTRIES: sectores relevantes (ej. Fintech, Retail, Energía).
   • EDUCATION: entradas con institución + título + período.
@@ -45,51 +45,75 @@ Si faltan NAME o ROLE, dejalos vacíos. Asegurate de que SKILLS sea una lista de
 function toolsDefinition() {
   return [
     {
-      type: 'function',
-      name: 'fill_template_html',
-      description: 'Genera un HTML completo reemplazando placeholders por los campos indicados.',
+      type: "function",
+      name: "fill_template_html",
+      description:
+        "Genera un HTML completo reemplazando placeholders por los campos indicados.",
       parameters: {
-        type: 'object',
+        type: "object",
         properties: {
-          template_path: { type: 'string', description: 'Ruta del template base (HTML con placeholders).' },
-          output_html_path: { type: 'string', description: 'Ruta donde guardar el HTML de trabajo.' },
+          template_path: {
+            type: "string",
+            description: "Ruta del template base (HTML con placeholders).",
+          },
+          output_html_path: {
+            type: "string",
+            description: "Ruta donde guardar el HTML de trabajo.",
+          },
           fields: {
-            type: 'object',
-            description: 'Campos a inyectar. Ej: {"SUMMARY": "...", "SKILLS": [...], "NAME": "", "ROLE": ""}.',
+            type: "object",
+            description:
+              'Campos a inyectar. Ej: {"SUMMARY": "...", "SKILLS": [...], "NAME": "", "ROLE": ""}.',
             additionalProperties: true,
           },
         },
-        required: ['template_path', 'output_html_path', 'fields'],
+        required: ["template_path", "output_html_path", "fields"],
         additionalProperties: false,
       },
     },
     {
-      type: 'function',
-      name: 'preview_resume_snapshot',
-      description: 'Genera una captura del HTML actual y la sube para revisión visual.',
+      type: "function",
+      name: "preview_resume_snapshot",
+      description:
+        "Genera una captura del HTML actual y la sube para revisión visual.",
       parameters: {
-        type: 'object',
+        type: "object",
         properties: {
-          html_path: { type: 'string', description: 'Ruta al HTML que se quiere previsualizar.' },
-          image_path: { type: 'string', description: 'Ruta donde guardar la captura PNG.' },
-          width: { type: 'integer', description: 'Ancho opcional de viewport en px.' },
-          height: { type: 'integer', description: 'Alto opcional de viewport en px.' },
+          html_path: {
+            type: "string",
+            description: "Ruta al HTML que se quiere previsualizar.",
+          },
+          image_path: {
+            type: "string",
+            description: "Ruta donde guardar la captura PNG.",
+          },
+          width: {
+            type: "integer",
+            description: "Ancho opcional de viewport en px.",
+          },
+          height: {
+            type: "integer",
+            description: "Alto opcional de viewport en px.",
+          },
         },
-        required: ['html_path'],
+        required: ["html_path"],
         additionalProperties: false,
       },
     },
     {
-      type: 'function',
-      name: 'export_resume_pdf',
-      description: 'Convierte el HTML final en un PDF definitivo.',
+      type: "function",
+      name: "export_resume_pdf",
+      description: "Convierte el HTML final en un PDF definitivo.",
       parameters: {
-        type: 'object',
+        type: "object",
         properties: {
-          html_path: { type: 'string', description: 'Ruta del HTML final.' },
-          output_pdf_path: { type: 'string', description: 'Ruta del PDF a generar.' },
+          html_path: { type: "string", description: "Ruta del HTML final." },
+          output_pdf_path: {
+            type: "string",
+            description: "Ruta del PDF a generar.",
+          },
         },
-        required: ['html_path', 'output_pdf_path'],
+        required: ["html_path", "output_pdf_path"],
         additionalProperties: false,
       },
     },
@@ -101,7 +125,11 @@ function extractToolCalls(resp) {
   const outputs = resp?.output || [];
   for (const block of outputs) {
     if (!block) continue;
-    if (block.type === 'function_call' || block.type === 'tool_call' || block.type === 'custom_tool_call') {
+    if (
+      block.type === "function_call" ||
+      block.type === "tool_call" ||
+      block.type === "custom_tool_call"
+    ) {
       collected.push({
         call_id: block.call_id || block.id,
         name: block.name,
@@ -111,7 +139,7 @@ function extractToolCalls(resp) {
     }
     if (Array.isArray(block.content)) {
       for (const item of block.content) {
-        if (item?.type === 'tool_call' || item?.type === 'custom_tool_call') {
+        if (item?.type === "tool_call" || item?.type === "custom_tool_call") {
           collected.push({
             call_id: item.call_id || item.id,
             name: item.name,
@@ -133,9 +161,9 @@ function extractToolCalls(resp) {
 
 function makeToolOutput(callId, output) {
   return {
-    type: 'function_call_output',
+    type: "function_call_output",
     call_id: callId,
-    output: typeof output === 'string' ? output : JSON.stringify(output),
+    output: typeof output === "string" ? output : JSON.stringify(output),
   };
 }
 
@@ -151,7 +179,7 @@ function createAgentState(initialHtmlPath, maxPreviews) {
     correctionUsed: false,
     lastHtmlPath: initialHtmlPath,
     exportSucceeded: false,
-    finalText: '',
+    finalText: "",
     lastError: null,
   };
 }
@@ -174,9 +202,9 @@ function ensureContextBudget(messages, logDetail) {
 }
 
 function sanitizeSnapshotResult(result) {
-  if (!result || typeof result !== 'object') return result;
+  if (!result || typeof result !== "object") return result;
   const sanitized = { ...result };
-  if ('image_base64' in sanitized) sanitized.image_base64 = undefined;
+  if ("image_base64" in sanitized) sanitized.image_base64 = undefined;
   return sanitized;
 }
 
@@ -184,18 +212,21 @@ function buildSnapshotMessages(base64, state) {
   if (!base64) return [];
   const messages = [
     {
-      role: 'user',
+      role: "user",
       content: [
-        { type: 'input_text', text: 'Snapshot del CV actual. Revisá el layout y ajustá si hace falta.' },
-        { type: 'input_image', image_url: `data:image/jpeg;base64,${base64}` },
+        {
+          type: "input_text",
+          text: "Snapshot del CV actual. Revisá el layout y ajustá si hace falta.",
+        },
+        { type: "input_image", image_url: `data:image/jpeg;base64,${base64}` },
       ],
     },
   ];
   if (state.previewCount >= state.maxPreviews) {
     messages.push({
-      role: 'system',
+      role: "system",
       content: toInputContent(
-        'Ya usaste la única vista previa disponible. Documentá cualquier pendiente en texto y continuá con la exportación.'
+        "Ya usaste la única vista previa disponible. Documentá cualquier pendiente en texto y continuá con la exportación."
       ),
     });
   }
@@ -203,43 +234,37 @@ function buildSnapshotMessages(base64, state) {
 }
 
 function derivePreviewNote(state) {
-  if (!state.previewCount) return '';
+  if (!state.previewCount) return "";
   if (!state.correctionUsed) {
-    return 'Falta aplicar la corrección posterior a la única vista previa antes de exportar.';
+    return "Falta aplicar la corrección posterior a la única vista previa antes de exportar.";
   }
   if (state.previewCount >= state.maxPreviews) {
-    return 'Vista previa agotada tras la corrección. Documentá el estado y procedé a exportar.';
+    return "Vista previa agotada tras la corrección. Documentá el estado y procedé a exportar.";
   }
-  return 'Corrección aplicada; documentá los cambios antes de exportar.';
+  return "Corrección aplicada; documentá los cambios antes de exportar.";
 }
 
 function deriveIterationNote(state, currentNote) {
   if (currentNote) return currentNote;
   if (state.exportSucceeded) {
-    return 'Export completada; confirmá el cierre y compartí la ruta final.';
+    return "Export completada; confirmá el cierre y compartí la ruta final.";
   }
   if (state.previewCount >= state.maxPreviews) {
     return state.correctionUsed
-      ? 'Única vista previa agotada con corrección aplicada; procedé a exportar.'
-      : 'Única vista previa agotada sin corrección; documentá pendientes antes de exportar.';
+      ? "Única vista previa agotada con corrección aplicada; procedé a exportar."
+      : "Única vista previa agotada sin corrección; documentá pendientes antes de exportar.";
   }
   if (state.previewCount > 0 && !state.correctionUsed) {
-    return 'Corrección posterior a la vista previa aún pendiente.';
+    return "Corrección posterior a la vista previa aún pendiente.";
   }
   if (!state.initialFillDone) {
-    return 'Generá el HTML base antes de intentar la vista previa.';
+    return "Generá el HTML base antes de intentar la vista previa.";
   }
-  return '';
+  return "";
 }
 
 function createToolHandlers(context) {
-  const {
-    logAction,
-    logDetail,
-    paths,
-    tempFiles,
-    state,
-  } = context;
+  const { logAction, logDetail, paths, tempFiles, state } = context;
 
   const executeFillTemplate = async (args = {}) => {
     const templatePathArg = args?.template_path || paths.template;
@@ -251,27 +276,30 @@ function createToolHandlers(context) {
     } else if (state.previewCount === 0) {
       result = {
         ok: false,
-        error: 'Ya rellenaste el template base. Revisá la vista previa antes de intentar otra corrección.',
+        error:
+          "Ya rellenaste el template base. Revisá la vista previa antes de intentar otra corrección.",
       };
-      logDetail('second fill before preview blocked.');
+      logDetail("second fill before preview blocked.");
     } else if (!state.correctionUsed) {
       state.correctionUsed = true;
     } else if (state.previewCount >= state.maxPreviews) {
       result = {
         ok: false,
-        error: 'Alcanzaste el límite de previsualizaciones. Exportá el PDF o detallá el problema.',
+        error:
+          "Alcanzaste el límite de previsualizaciones. Exportá el PDF o detallá el problema.",
       };
-      logDetail('correction blocked after reaching preview limit.');
+      logDetail("correction blocked after reaching preview limit.");
     } else {
       result = {
         ok: false,
-        error: 'Ya aplicaste la corrección permitida. Exportá el PDF o describí el problema.',
+        error:
+          "Ya aplicaste la corrección permitida. Exportá el PDF o describí el problema.",
       };
-      logDetail('additional correction blocked after preview.');
+      logDetail("additional correction blocked after preview.");
     }
 
     if (!result) {
-      logAction('Calling fill_template_html');
+      logAction("Calling fill_template_html");
       logDetail(`template_path: ${templatePathArg}`);
       logDetail(`output_html_path: ${outputHtmlPath}`);
       try {
@@ -296,19 +324,19 @@ function createToolHandlers(context) {
       extraMessages: [],
       continueLoop: false,
       exitLoop: false,
-      note: '',
+      note: "",
     };
   };
 
   const executePreview = async (args = {}) => {
     let result;
     if (state.previewCount >= state.maxPreviews) {
-      logDetail('preview limit reached; preview_resume_snapshot skipped.');
-      result = { ok: false, error: 'Límite de previsualizaciones alcanzado.' };
+      logDetail("preview limit reached; preview_resume_snapshot skipped.");
+      result = { ok: false, error: "Límite de previsualizaciones alcanzado." };
     } else {
       const htmlPath = args?.html_path || state.lastHtmlPath;
       const imagePath = args?.image_path || paths.previewImage;
-      logAction('Calling preview_resume_snapshot');
+      logAction("Calling preview_resume_snapshot");
       logDetail(`html_path: ${htmlPath}`);
       logDetail(`image_path: ${imagePath}`);
       try {
@@ -331,19 +359,19 @@ function createToolHandlers(context) {
     const sanitized = sanitizeSnapshotResult(result);
     const recordResult = sanitizeSnapshotResult(result);
     const extraMessages = [];
-    let note = '';
+    let note = "";
     let continueLoop = false;
 
     if (result?.image_base64) {
       state.previewCount += 1;
       logDetail(`previews used: ${state.previewCount} / ${state.maxPreviews}`);
-      logAction('Preview ready for review.');
+      logAction("Preview ready for review.");
       try {
         if (result?.image_path) {
           await fsp.access(result.image_path);
         }
       } catch {
-        logDetail('preview image missing on disk (ignorado).');
+        logDetail("preview image missing on disk (ignorado).");
       }
       extraMessages.push(...buildSnapshotMessages(result.image_base64, state));
       note = derivePreviewNote(state);
@@ -365,30 +393,32 @@ function createToolHandlers(context) {
     if (state.previewCount === 0) {
       result = {
         ok: false,
-        error: 'Generá al menos una vista previa y revisá el layout antes de exportar el PDF.',
+        error:
+          "Generá al menos una vista previa y revisá el layout antes de exportar el PDF.",
       };
-      logDetail('export blocked: preview missing.');
+      logDetail("export blocked: preview missing.");
     } else if (!state.correctionUsed) {
       result = {
         ok: false,
-        error: 'Aplicá la corrección posterior a la vista previa con fill_template_html antes de exportar.',
+        error:
+          "Aplicá la corrección posterior a la vista previa con fill_template_html antes de exportar.",
       };
-      logDetail('export blocked: pending post-preview correction.');
+      logDetail("export blocked: pending post-preview correction.");
     } else {
       const htmlPath = args?.html_path || state.lastHtmlPath;
       const pdfPath = args?.output_pdf_path || paths.pdfOut;
-      logAction('Calling export_resume_pdf');
+      logAction("Calling export_resume_pdf");
       logDetail(`html_path: ${htmlPath}`);
       logDetail(`output_pdf_path: ${pdfPath}`);
       try {
         result = await exportResumePdf({ htmlPath, outputPdfPath: pdfPath });
         state.exportSucceeded = !!result?.ok;
         if (!state.exportSucceeded) {
-          state.lastError = result?.error || 'Fallo desconocido al exportar.';
+          state.lastError = result?.error || "Fallo desconocido al exportar.";
           logDetail(`error: ${state.lastError}`);
         } else {
           state.finalText = `PDF generated at ${pdfPath}`;
-          logDetail('Export completed.');
+          logDetail("Export completed.");
         }
       } catch (err) {
         state.exportSucceeded = false;
@@ -404,7 +434,7 @@ function createToolHandlers(context) {
       extraMessages: [],
       continueLoop: false,
       exitLoop: state.exportSucceeded,
-      note: '',
+      note: "",
     };
   };
 
@@ -417,7 +447,7 @@ function createToolHandlers(context) {
 
 export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
   const debugLog = (...args) => {
-    if (DEBUG) console.log('[cv-agent:debug]', ...args);
+    if (DEBUG) console.log("[cv-agent:debug]", ...args);
   };
   const logAction = (msg) => console.log(`• ${msg}`);
   const logDetail = (msg) => console.log(`  └ ${msg}`);
@@ -425,10 +455,21 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
   const absCv = path.resolve(cvPath);
   const absOut = path.resolve(outPath);
   const absTemplate = path.resolve(templatePath);
-  const workingHtmlPath = path.resolve(path.dirname(absOut), 'resume-working.html');
-  const previewImagePath = path.resolve(path.dirname(absOut), 'resume-preview.png');
+  const workingHtmlPath = path.resolve(
+    path.dirname(absOut),
+    "resume-working.html"
+  );
+  const previewImagePath = path.resolve(
+    path.dirname(absOut),
+    "resume-preview.png"
+  );
 
-  debugLog('start', { cvPath: absCv, outPath: absOut, templatePath: absTemplate, modelOverride: model });
+  debugLog("start", {
+    cvPath: absCv,
+    outPath: absOut,
+    templatePath: absTemplate,
+    modelOverride: model,
+  });
   await fsp.access(absCv);
   await fsp.access(absTemplate);
 
@@ -436,40 +477,40 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
   let uploadedFileId;
 
   try {
-    logAction('Uploading source PDF…');
+    logAction("Uploading source PDF…");
     const uploaded = await openai.files.create({
       file: fs.createReadStream(absCv),
-      purpose: 'user_data',
+      purpose: "user_data",
     });
     uploadedFileId = uploaded.id;
     logDetail(`file_id: ${uploadedFileId}`);
 
     const input = [
-      { role: 'system', content: toInputContent(SYSTEM_PROMPT) },
+      { role: "system", content: toInputContent(SYSTEM_PROMPT) },
       {
-        role: 'system',
+        role: "system",
         content: toInputContent(
           `Paths sugeridos:\n- TEMPLATE_PATH: ${absTemplate}\n- WORKING_HTML_PATH: ${workingHtmlPath}\n- PREVIEW_IMAGE_PATH: ${previewImagePath}\n- OUTPUT_PDF_PATH: ${absOut}\nSeguí el flujo fill_template_html → preview_resume_snapshot → export_resume_pdf.`
         ),
       },
       {
-        role: 'user',
+        role: "user",
         content: [
           {
-            type: 'input_text',
-            text: 'Tenés el CV adjunto. Construí el HTML, revisá la vista previa y recién después exportá el PDF final.',
+            type: "input_text",
+            text: "Tenés el CV adjunto. Construí el HTML, revisá la vista previa y recién después exportá el PDF final.",
           },
-          { type: 'input_file', file_id: uploadedFileId },
+          { type: "input_file", file_id: uploadedFileId },
         ],
       },
     ];
 
     const tools = toolsDefinition();
-    const modelId = model || process.env.OPENAI_MODEL || 'gpt-5-codex';
+    const modelId = model || process.env.OPENAI_MODEL || "gpt-5-codex";
 
     let previousResponseId;
     let lastResponse = null;
-    let finalText = '';
+    let finalText = "";
     let exportSucceeded = false;
     let lastError = null;
 
@@ -520,52 +561,64 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
           logAction(`Insight iteración ${iteration}`);
           logDetail(insight);
           input.push({
-            role: 'system',
-            content: toInputContent(`Insight iteración ${iteration}: ${insight}`),
+            role: "system",
+            content: toInputContent(
+              `Insight iteración ${iteration}: ${insight}`
+            ),
           });
         }
       } catch (err) {
-        debugLog('insight-error', err?.message || err);
+        debugLog("insight-error", err?.message || err);
       }
     };
 
-turnLoop: for (let turn = 0; turn < 8; turn += 1) {
+    turnLoop: for (let turn = 0; turn < 8; turn += 1) {
       const iteration = turn + 1;
-      debugLog('turn', { turn: iteration });
+      debugLog("turn", { turn: iteration });
       ensureContextBudget(input, logDetail);
       const response = await openai.responses.create({
         model: modelId,
         input,
         tools,
-        tool_choice: 'auto',
+        tool_choice: "auto",
         max_output_tokens: MAX_OUTPUT_TOKENS,
-        reasoning: { effort: 'high', summary: 'auto' },
-        ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
+        reasoning: { effort: "high", summary: "auto" },
+        ...(previousResponseId
+          ? { previous_response_id: previousResponseId }
+          : {}),
       });
 
-      debugLog('response', response);
+      debugLog("response", response);
       lastResponse = response;
       const toolCalls = extractToolCalls(response);
-      debugLog('tool-calls', toolCalls);
+      debugLog("tool-calls", toolCalls);
 
       const iterationActions = [];
-      let iterationNote = '';
+      let iterationNote = "";
       let exitLoop = false;
 
       if (!toolCalls.length) {
         logAction(`Iteration ${iteration}: no tool calls received.`);
-        logAction('Model responded without tool call; reminding about export.');
+        logAction("Model responded without tool call; reminding about export.");
         input.push({
-          role: 'system',
-          content: toInputContent('Recordá finalizar con export_resume_pdf una vez que la vista previa esté aprobada.'),
+          role: "system",
+          content: toInputContent(
+            "Recordá finalizar con export_resume_pdf una vez que la vista previa esté aprobada."
+          ),
         });
-        iterationNote = 'Sin tool calls; se envió recordatorio.';
-        await appendIterationInsight({ iteration, actions: iterationActions, note: iterationNote });
+        iterationNote = "Sin tool calls; se envió recordatorio.";
+        await appendIterationInsight({
+          iteration,
+          actions: iterationActions,
+          note: iterationNote,
+        });
         previousResponseId = response.id;
         continue;
       }
 
-      logAction(`Iteration ${iteration}: model requested ${toolCalls.length} tool call(s).`);
+      logAction(
+        `Iteration ${iteration}: model requested ${toolCalls.length} tool call(s).`
+      );
       toolCalls.forEach((call, idx) => {
         logDetail(`tool[${idx + 1}]: ${call.name}`);
       });
@@ -574,12 +627,15 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
         const { name, call_id: callId } = call;
         let args = {};
         try {
-          args = typeof call.input === 'string' ? JSON.parse(call.input) : call.input || {};
+          args =
+            typeof call.input === "string"
+              ? JSON.parse(call.input)
+              : call.input || {};
         } catch {
           args = {};
         }
 
-        debugLog('tool-exec', { name, args });
+        debugLog("tool-exec", { name, args });
         const handler = toolHandlers[name];
         let outcome;
         if (handler) {
@@ -592,7 +648,7 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
             extraMessages: [],
             continueLoop: false,
             exitLoop: false,
-            note: '',
+            note: "",
           };
         }
 
@@ -601,7 +657,10 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
         if (outcome.recordResult) {
           iterationActions.push({ name, args, result: outcome.recordResult });
         }
-        if (Array.isArray(outcome.extraMessages) && outcome.extraMessages.length > 0) {
+        if (
+          Array.isArray(outcome.extraMessages) &&
+          outcome.extraMessages.length > 0
+        ) {
           for (const msg of outcome.extraMessages) {
             input.push(msg);
           }
@@ -611,7 +670,11 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
         }
 
         if (outcome.continueLoop) {
-          await appendIterationInsight({ iteration, actions: iterationActions, note: iterationNote });
+          await appendIterationInsight({
+            iteration,
+            actions: iterationActions,
+            note: iterationNote,
+          });
           previousResponseId = response.id;
           continue turnLoop;
         }
@@ -623,26 +686,35 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
       }
 
       iterationNote = deriveIterationNote(agentState, iterationNote);
-      await appendIterationInsight({ iteration, actions: iterationActions, note: iterationNote });
+      await appendIterationInsight({
+        iteration,
+        actions: iterationActions,
+        note: iterationNote,
+      });
 
       previousResponseId = response.id;
       if (exitLoop) break;
     }
 
     try {
-      debugLog('export-status', { exportSucceeded });
+      debugLog("export-status", { exportSucceeded });
       await fsp.access(absOut);
     } catch {
-      if (agentState.lastError) throw new Error(`No se generó el PDF de salida: ${agentState.lastError}`);
-      throw new Error('No se generó el PDF de salida.');
+      if (agentState.lastError)
+        throw new Error(
+          `No se generó el PDF de salida: ${agentState.lastError}`
+        );
+      throw new Error("No se generó el PDF de salida.");
     }
 
     if (!agentState.exportSucceeded) {
-      throw new Error(agentState.lastError || 'export_resume_pdf no completó correctamente.');
+      throw new Error(
+        agentState.lastError || "export_resume_pdf no completó correctamente."
+      );
     }
 
     const finalMessage = agentState.finalText || `PDF generated at ${absOut}`;
-    debugLog('final-message', finalMessage);
+    debugLog("final-message", finalMessage);
     logAction(`Done. PDF generated at ${absOut}`);
 
     return {
@@ -652,18 +724,18 @@ turnLoop: for (let turn = 0; turn < 8; turn += 1) {
     };
   } finally {
     if (uploadedFileId) {
-      debugLog('file-delete', uploadedFileId);
+      debugLog("file-delete", uploadedFileId);
       try {
         await openai.files.del(uploadedFileId);
       } catch (err) {
-        debugLog('file-delete-error', err?.message || err);
+        debugLog("file-delete-error", err?.message || err);
       }
     }
     for (const tempPath of tempFiles) {
       try {
         await fsp.unlink(tempPath);
       } catch (err) {
-        debugLog('temp-delete-error', { tempPath, error: err?.message || err });
+        debugLog("temp-delete-error", { tempPath, error: err?.message || err });
       }
     }
   }
