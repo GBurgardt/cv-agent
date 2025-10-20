@@ -3,6 +3,8 @@ import path from "path";
 import Docxtemplater from "docxtemplater";
 import PizZip from "pizzip";
 
+const BULLET_CHAR = "•";
+
 function isEmptyObject(obj) {
   return (
     obj &&
@@ -95,6 +97,48 @@ function normalizeFields(fields = {}) {
   return normalized;
 }
 
+function addDerivedFields(fields = {}) {
+  const draft = { ...fields };
+  const languages =
+    fields?.LANGUAGES ??
+    fields?.languages ??
+    fields?.Languages ??
+    fields?.language;
+
+  if (Array.isArray(languages)) {
+    const lines = languages
+      .map((entry) => {
+        if (!entry) return "";
+        if (typeof entry === "string") {
+          return entry.trim();
+        }
+        const language =
+          entry?.language ||
+          entry?.name ||
+          entry?.label ||
+          (typeof entry?.text === "string" ? entry.text : "");
+        const level =
+          entry?.level ||
+          entry?.proficiency ||
+          entry?.fluency ||
+          entry?.description ||
+          "";
+        const pieces = [language, level].map((part) =>
+          typeof part === "string" ? part.trim() : ""
+        );
+        const compact = pieces.filter(Boolean).join(" — ");
+        return compact;
+      })
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => `${BULLET_CHAR} ${line}`);
+
+    draft.LANGUAGES_LINES = lines.join("\n");
+  }
+
+  return draft;
+}
+
 export async function fillTemplateDocx({
   templatePath,
   outputDocxPath,
@@ -111,7 +155,8 @@ export async function fillTemplateDocx({
   });
 
   try {
-    const data = normalizeFields(fields);
+    const enriched = addDerivedFields(fields);
+    const data = normalizeFields(enriched);
     doc.render(data);
   } catch (err) {
     const details =
