@@ -5,6 +5,59 @@ import PizZip from "pizzip";
 
 const BULLET_CHAR = "•";
 
+const LANGUAGE_LEVEL_MAP = {
+  native: "native",
+  "native or bilingual": "native",
+  "bilingual": "native",
+  "nativo": "native",
+  "nativo o bilingue": "native",
+  fluent: "fluent",
+  "fluido": "fluent",
+  "advanced": "advanced",
+  "avanzado": "advanced",
+  "upper intermediate": "advanced",
+  "profesional": "intermediate",
+  "professional": "intermediate",
+  "professional working proficiency": "intermediate",
+  "intermedio": "intermediate",
+  "intermediate": "intermediate",
+  "elemental": "basic",
+  "basico": "basic",
+  "básico": "basic",
+  basic: "basic",
+  beginner: "basic",
+};
+
+const IGNORED_TEXT_VALUES = new Set(["undefined", "null", "n/a", "na", "-"]);
+
+function normalizeKey(value = "") {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function mapLanguageLevel(raw) {
+  if (!raw) return "";
+  const key = normalizeKey(String(raw));
+  return LANGUAGE_LEVEL_MAP[key] || String(raw).trim().toLowerCase();
+}
+
+function toList(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    const normalized = value
+      .split(/[\r\n,]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    return normalized;
+  }
+  if (!value) return [];
+  return [value];
+}
+
 function isEmptyObject(obj) {
   return (
     obj &&
@@ -99,41 +152,94 @@ function normalizeFields(fields = {}) {
 
 function addDerivedFields(fields = {}) {
   const draft = { ...fields };
-  const languages =
+  const languageSource =
     fields?.LANGUAGES ??
     fields?.languages ??
     fields?.Languages ??
-    fields?.language;
+    fields?.language ??
+    fields?.langs;
 
-  if (Array.isArray(languages)) {
-    const lines = languages
+  if (languageSource) {
+    const languages = toList(languageSource)
       .map((entry) => {
         if (!entry) return "";
         if (typeof entry === "string") {
-          return entry.trim();
+          const trimmed = entry.trim();
+          if (!trimmed) return "";
+          return trimmed.includes("(") ? trimmed : `${trimmed}`;
         }
         const language =
-          entry?.language ||
-          entry?.name ||
-          entry?.label ||
-          (typeof entry?.text === "string" ? entry.text : "");
-        const level =
-          entry?.level ||
-          entry?.proficiency ||
-          entry?.fluency ||
-          entry?.description ||
+          (typeof entry.language === "string" && entry.language.trim()) ||
+          (typeof entry.name === "string" && entry.name.trim()) ||
+          (typeof entry.label === "string" && entry.label.trim()) ||
+          (typeof entry.text === "string" && entry.text.trim()) ||
           "";
-        const pieces = [language, level].map((part) =>
-          typeof part === "string" ? part.trim() : ""
-        );
-        const compact = pieces.filter(Boolean).join(" — ");
-        return compact;
+        const levelRaw =
+          (typeof entry.level === "string" && entry.level.trim()) ||
+          (typeof entry.proficiency === "string" && entry.proficiency.trim()) ||
+          (typeof entry.fluency === "string" && entry.fluency.trim()) ||
+          (typeof entry.description === "string" && entry.description.trim()) ||
+          "";
+        const levelMapped = mapLanguageLevel(levelRaw);
+        const label = language || "";
+        if (!label) return "";
+        if (!levelMapped) return label;
+        return `${label}(${levelMapped})`;
       })
       .map((line) => line.trim())
-      .filter((line) => line.length > 0)
+      .filter((line) => {
+        if (!line) return false;
+        const key = normalizeKey(line);
+        return !IGNORED_TEXT_VALUES.has(key);
+      })
+      .filter((line, idx, arr) => arr.indexOf(line) === idx)
       .map((line) => `${BULLET_CHAR} ${line}`);
 
-    draft.LANGUAGES_LINES = lines.join("\n");
+    draft.LANGUAGES_LINES = languages.join("\n");
+  }
+
+  const industriesSource =
+    fields?.INDUSTRIES ??
+    fields?.industries ??
+    fields?.Industries ??
+    fields?.sectors ??
+    fields?.industry;
+
+  if (industriesSource) {
+    const industries = toList(industriesSource)
+      .flatMap((item) =>
+        typeof item === "string" ? item.split(/[\r\n]+/) : [item]
+      )
+      .map((item) => {
+        if (!item) return "";
+        if (typeof item === "string") return item.trim();
+        if (typeof item === "object") {
+          const label =
+            (typeof item.name === "string" && item.name.trim()) ||
+            (typeof item.label === "string" && item.label.trim()) ||
+            (typeof item.text === "string" && item.text.trim()) ||
+            "";
+          return label;
+        }
+        return String(item).trim();
+      })
+      .map((line) => line.trim())
+      .filter((line) => {
+        if (!line) return false;
+        const key = normalizeKey(line);
+        return !IGNORED_TEXT_VALUES.has(key);
+      })
+      .filter((line, idx, arr) => arr.indexOf(line) === idx)
+      .map((line) => `${BULLET_CHAR} ${line}`);
+
+    draft.INDUSTRIES_LINES = industries.join("\n");
+  }
+
+  if (!draft.LANGUAGES_LINES) {
+    draft.LANGUAGES_LINES = "";
+  }
+  if (!draft.INDUSTRIES_LINES) {
+    draft.INDUSTRIES_LINES = "";
   }
 
   return draft;

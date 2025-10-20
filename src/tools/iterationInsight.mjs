@@ -32,24 +32,14 @@ function formatSummaryEntry(entry) {
   if (!entry) return '';
   const toolSegment = entry.toolCalls?.length
     ? entry.toolCalls.map(formatToolCall).filter(Boolean).join(', ')
-    : 'sin tools';
+    : 'no tools';
   const details = [];
-  if (typeof entry.previewCount === 'number') details.push(`previews ${entry.previewCount}`);
-  if (entry.correctionUsed) details.push('corrección aplicada');
-  const needsCorrection =
-    entry.initialFillDone &&
-    !entry.correctionUsed &&
-    typeof entry.previewCount === 'number' &&
-    entry.previewCount > 0 &&
-    !entry.exportSucceeded;
-  if (needsCorrection) details.push('corrección pendiente');
-  if (entry.exportSucceeded) details.push('export listo');
-  if (!entry.exportSucceeded && entry.lastError) {
-    details.push(`error: ${trimValue(entry.lastError, 90)}`);
-  }
+  if (typeof entry.fills === 'number') details.push(`fills ${entry.fills}`);
+  if (entry.docxGenerated) details.push('docx ready');
+  if (entry.lastError) details.push(`error: ${trimValue(entry.lastError, 90)}`);
   if (entry.note) details.push(trimValue(entry.note, 90));
   const detailSegment = details.length ? ` | ${details.join(' · ')}` : '';
-  return `Iteración ${entry.iteration}: ${toolSegment}${detailSegment}`;
+  return `Iteration ${entry.iteration}: ${toolSegment}${detailSegment}`;
 }
 
 function extractTextFromResponse(response) {
@@ -75,18 +65,18 @@ function extractTextFromResponse(response) {
 }
 
 export async function generateIterationInsight({ client, model, history }) {
-  if (!client) throw new Error('OpenAI client requerido para iteration insight.');
-  if (!model) throw new Error('Modelo no definido para iteration insight.');
+  if (!client) throw new Error('OpenAI client is required for iteration insight.');
+  if (!model) throw new Error('Model is not defined for iteration insight.');
 
   const records = Array.isArray(history) ? history.slice(-5) : [];
   if (!records.length) return '';
 
   const context = records.map(formatSummaryEntry).filter(Boolean).join('\n');
   const prompt = [
-    'Contexto del agente CV:',
+    'CV agent context:',
     context,
     '',
-    'Respondé en español neutro con 1–2 líneas, tono práctico. Explicá qué está ocurriendo y qué acción concreta conviene intentar a continuación. Evitá repetir frases o ideas; si una sola oración alcanza, usala.',
+    'Respond in concise English (one or two sentences). Summarize the current state and recommend the next concrete action. Avoid repetition.',
   ].join('\n');
 
   const response = await client.responses.create({
@@ -95,7 +85,7 @@ export async function generateIterationInsight({ client, model, history }) {
       {
         role: 'system',
         content:
-          'Sos un analista que resume el estado de un agente de automatización. Producciones breves, accionables y sin emojis.',
+          'You are an analyst summarizing the status of an automation agent. Output short, actionable insights without emojis.',
       },
       { role: 'user', content: prompt },
     ],

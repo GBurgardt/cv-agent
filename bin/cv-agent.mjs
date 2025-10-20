@@ -7,22 +7,22 @@ const argv = yargs(hideBin(process.argv))
   .usage('Usage: $0 --cv <path> [--out <path>] [--template <path>] [--model <id>]')
   .option('cv', {
     type: 'string',
-    describe: 'Ruta al PDF del CV a procesar',
+    describe: 'Path to the source résumé PDF',
     demandOption: true,
   })
-.option('out', {
-  type: 'string',
-  describe: 'Ruta del DOCX de salida',
-  default: './out/output.docx',
-})
+  .option('out', {
+    type: 'string',
+    describe: 'Path for the generated DOCX',
+    default: './out/output.docx',
+  })
   .option('template', {
     type: 'string',
-    describe: 'Ruta del template DOCX a utilizar',
+    describe: 'Path to the DOCX template',
     default: './templates/test_template.docx',
   })
   .option('model', {
     type: 'string',
-    describe: 'Modelo de OpenAI a utilizar',
+    describe: 'OpenAI model to use',
     default: process.env.OPENAI_MODEL || 'gpt-5-codex',
   })
   .help()
@@ -37,8 +37,8 @@ const argv = yargs(hideBin(process.argv))
       templatePath: argv.template,
       model: argv.model,
     });
-    console.log('\n✅ Listo.');
-    console.log(`→ Salida DOCX: ${result?.outputPath || argv.out}`);
+    console.log('\n✅ Done.');
+    console.log(`→ DOCX output: ${result?.outputPath || argv.out}`);
   } catch (err) {
     console.error('❌ Error:', err.message);
     process.exit(1);

@@ -8,33 +8,33 @@ import { trimInputToBudget } from "./utils/tokenBudget.mjs";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const DEBUG = process.env.CV_AGENT_DEBUG === "1";
-// gpt-5-codex expone un contexto de ~200k tokens según documentación pública:
+// gpt-5-codex exposes ~200k tokens of context in public documentation:
 // https://github.com/openai/codex/issues/2002
 const MODEL_CONTEXT_LIMIT = Number(process.env.MODEL_CONTEXT_LIMIT ?? 200000);
 const CONTEXT_RESERVE_RATIO = Number(process.env.CONTEXT_RESERVE_RATIO ?? 0.6);
 
 const SYSTEM_PROMPT = `
-Sos "CV Builder DOCX". Objetivo: transformar un CV PDF en un DOCX final usando el template entregado.
+You are "CV Builder DOCX". Your goal is to transform the attached résumé PDF into a finished DOCX using the provided template.
 
-Reglas:
-- El PDF del CV ya está adjunto: leelo y usá su contenido para poblar los campos.
-- Trabajá en español neutro, tono conciso y profesional, sin emojis.
-- Debés armar:
-  • SUMMARY: 4-6 líneas, orientado a reclutamiento.
-  • SKILLS: string único con las principales habilidades separadas por comas (deduplicá por nombre).
-  • LANGUAGES: array de objetos {language, level}.
-  • KEY INDUSTRIES: array de strings con los sectores relevantes.
-  • EDUCATION: array de objetos {institution, degree, period}.
-  • EXPERIENCE: array cronológico de objetos {role, company, period, location, summary, bullets?}. Cada bullets es un array de strings.
-  • NAME y ROLE si se infieren; en caso contrario, dejá strings vacíos.
-- El template usa tags {SUMMARY}, {SKILLS}, {NAME}, {ROLE} y loops {#experience}, {#languages}, {#industries}, {#education}, {#bullets}. Respetá esos nombres exactos en el objeto fields.
-- Si un dato no existe, dejalo en blanco ("") o como lista vacía según corresponda.
-- Tratá cada mensaje que empiece con "Insight iteración" como instrucción prioritaria: cumplila antes de decidir el siguiente paso.
+Rules:
+- The résumé PDF is already attached. Read it and extract the relevant details.
+- Write everything in professional, concise English. No emojis.
+- Build the following structure:
+  • SUMMARY: 4–6 lines focused on recruitment highlights.
+  • SKILLS: one comma-separated string with the top technologies (deduplicate by case-insensitive label).
+  • LANGUAGES: array of objects { language, level, proficiency? }. Normalize proficiency to English labels (eg. Beginner, Intermediate, Advanced, Native).
+  • KEY INDUSTRIES: array of strings with the main industries.
+  • EDUCATION: array of objects { institution, degree, period }.
+  • EXPERIENCE: chronological array of objects { role, company, period, location, summary, bullets }. Each bullets item is a short string; include key achievements or responsibilities.
+  • NAME and ROLE if you can infer them; otherwise leave empty strings.
+- The template expects these exact fields: SUMMARY, SKILLS, LANGUAGES_LINES (string with lines already formatted), INDUSTRIES_LINES (string with lines already formatted), EDUCATION (array), EXPERIENCE (array with bullets array), NAME, ROLE.
+- Leave missing information as empty strings or empty arrays as appropriate.
+- Treat any message starting with "Iteration Insight" as the highest priority instruction; follow it before taking any further step.
 
-Flujo:
-  1. Llamá fill_docx_template(template_path, output_docx_path, fields) con todos los campos completos. Podés repetir la llamada si necesitás corregir.
-  2. Revisá la consistencia de los datos antes de finalizar.
-  3. Cuando estés conforme, respondé indicando que el DOCX está generado, resume brevemente qué incluye y menciona la ruta resultante.
+Flow:
+  1. Call fill_docx_template(template_path, output_docx_path, fields) with all fields populated. You may call it again if you need to correct data.
+  2. Double-check the data consistency before finishing.
+  3. When ready, state that the DOCX is generated, summarize its content briefly, and share the output path.
 `;
 
 function toolsDefinition() {
@@ -43,22 +43,22 @@ function toolsDefinition() {
       type: "function",
       name: "fill_docx_template",
       description:
-        "Rellena el template DOCX con los campos solicitados y genera un nuevo archivo.",
+        "Fills the DOCX template with the provided fields and writes the resulting document.",
       parameters: {
         type: "object",
         properties: {
           template_path: {
             type: "string",
-            description: "Ruta del template DOCX con placeholders.",
+            description: "Absolute path to the DOCX template that includes placeholders.",
           },
           output_docx_path: {
             type: "string",
-            description: "Ruta donde guardar el DOCX resultante.",
+            description: "Destination path for the generated DOCX.",
           },
           fields: {
             type: "object",
             description:
-              'Datos para inyectar. Ej: {"SUMMARY": "...", "SKILLS": "A, B", "experience": [...]}',
+              'Payload to inject into the template. Example: {"SUMMARY": "...", "SKILLS": "A, B", "EXPERIENCE": [...]}',
             additionalProperties: true,
           },
         },
@@ -230,7 +230,7 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
       {
         role: "system",
         content: toInputContent(
-          `Paths sugeridos:\n- TEMPLATE_PATH: ${absTemplate}\n- OUTPUT_DOCX_PATH: ${absOut}\nUsá fill_docx_template para generar el archivo final.`
+          `Suggested paths:\n- TEMPLATE_PATH: ${absTemplate}\n- OUTPUT_DOCX_PATH: ${absOut}\nUse fill_docx_template to build the final document.`
         ),
       },
       {
@@ -238,7 +238,7 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
         content: [
           {
             type: "input_text",
-            text: "Tenés el CV adjunto. Generá el DOCX usando el template y confirmá cuando quede listo.",
+            text: "The résumé PDF is attached. Generate the DOCX with the template and confirm once it is ready.",
           },
           { type: "input_file", file_id: uploadedFileId },
         ],
@@ -289,12 +289,12 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
           history: historySlice,
         });
         if (insight) {
-          logAction(`Insight iteración ${iteration}`);
+          logAction(`Iteration insight ${iteration}`);
           logDetail(insight);
           input.push({
             role: "system",
             content: toInputContent(
-              `Insight iteración ${iteration}: ${insight}`
+              `Iteration Insight ${iteration}: ${insight}`
             ),
           });
         }
@@ -333,10 +333,10 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
         input.push({
           role: "system",
           content: toInputContent(
-            "Recordá que debés llamar fill_docx_template para generar el DOCX con todos los campos."
+            "Remember to call fill_docx_template with all required fields to produce the DOCX."
           ),
         });
-        iterationNote = "Sin tool calls; se envió recordatorio.";
+        iterationNote = "No tool calls; reminder sent.";
         await appendIterationInsight({
           iteration,
           actions: iterationActions,
@@ -432,15 +432,15 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
     } catch {
       if (agentState.lastError) {
         throw new Error(
-          `No se generó el DOCX de salida: ${agentState.lastError}`
+          `The output DOCX was not created: ${agentState.lastError}`
         );
       }
-      throw new Error("No se generó el DOCX de salida.");
+      throw new Error("The output DOCX was not created.");
     }
 
     if (!agentState.docxGenerated) {
       throw new Error(
-        agentState.lastError || "fill_docx_template no completó correctamente."
+        agentState.lastError || "fill_docx_template did not finish correctly."
       );
     }
 
@@ -467,10 +467,10 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
 function deriveDocxIterationNote(state, currentNote) {
   if (currentNote) return currentNote;
   if (state.docxGenerated) {
-    return "DOCX generado; confirmá en texto el resultado y la ruta final.";
+    return "DOCX ready; confirm the result and share the final path.";
   }
   if (state.fills === 0) {
-    return "Falta llamar a fill_docx_template con todos los campos.";
+    return "Call fill_docx_template with the completed field set.";
   }
   return "";
 }
