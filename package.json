@@ -10,9 +10,11 @@
     "dev": "node --trace-warnings bin/cv-agent.mjs"
   },
   "dependencies": {
+    "docxtemplater": "^3.66.7",
     "dotenv": "^16.4.5",
     "fs-extra": "^11.2.0",
     "openai": "^4.64.0",
+    "pizzip": "^3.2.0",
     "puppeteer": "^23.6.0",
     "yargs": "^17.7.2"
   }

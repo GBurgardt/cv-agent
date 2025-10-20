@@ -12,13 +12,13 @@ const argv = yargs(hideBin(process.argv))
   })
 .option('out', {
   type: 'string',
-  describe: 'Ruta del PDF de salida',
-  default: './out/output.pdf',
+  describe: 'Ruta del DOCX de salida',
+  default: './out/output.docx',
 })
   .option('template', {
     type: 'string',
-    describe: 'Ruta del template HTML a utilizar',
-    default: './templates/cloudx-cv-template.html',
+    describe: 'Ruta del template DOCX a utilizar',
+    default: './templates/test_template.docx',
   })
   .option('model', {
     type: 'string',
@@ -38,7 +38,7 @@ const argv = yargs(hideBin(process.argv))
       model: argv.model,
     });
     console.log('\n✅ Listo.');
-    console.log(`→ Salida: ${result?.outputPath || argv.out}`);
+    console.log(`→ Salida DOCX: ${result?.outputPath || argv.out}`);
   } catch (err) {
     console.error('❌ Error:', err.message);
     process.exit(1);
