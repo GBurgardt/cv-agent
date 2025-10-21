@@ -149,18 +149,44 @@ function ensureContextBudget(messages, logDetail) {
 }
 
 function createToolHandlers(context) {
-  const { logAction, logDetail, paths, state } = context;
+  const { logAction, logDetail, debugLog, paths, state } = context;
+  const safeDebug =
+    typeof debugLog === "function"
+      ? debugLog
+      : () => {};
 
   const executeFillDocx = async (args = {}) => {
     const templatePathArg = args?.template_path || paths.template;
     const outputDocxPath = args?.output_docx_path || paths.outputDocx;
+    const explicitFields =
+      args && typeof args.fields === "object" && !Array.isArray(args.fields)
+        ? args.fields
+        : {};
+    const fallbackFields = Object.entries(args || {}).reduce(
+      (acc, [key, value]) => {
+        if (
+          key === "template_path" ||
+          key === "output_docx_path" ||
+          key === "fields" ||
+          key === "debugLog"
+        ) {
+          return acc;
+        }
+        acc[key] = value;
+        return acc;
+      },
+      {}
+    );
+    const mergedFields = Object.keys(explicitFields).length
+      ? { ...fallbackFields, ...explicitFields }
+      : fallbackFields;
     let result;
 
     logAction("Calling fill_docx_template");
     logDetail(`template_path: ${templatePathArg}`);
     logDetail(`output_docx_path: ${outputDocxPath}`);
     logDetail(
-      `fields keys: ${Object.keys(args?.fields || {})
+      `fields keys: ${Object.keys(mergedFields || {})
         .sort()
         .join(", ") || "(none)"}`
     );
@@ -168,13 +194,13 @@ function createToolHandlers(context) {
       result = await fillTemplateDocx({
         templatePath: templatePathArg,
         outputDocxPath,
-        fields: args?.fields || {},
+        fields: mergedFields,
       });
       if (DEBUG) {
-        debugLog("fill-docx-args", {
-          fields: args?.fields,
+        safeDebug("fill-docx-args", {
+          fields: mergedFields,
         });
-        debugLog("fill-docx-result", result);
+        safeDebug("fill-docx-result", result);
       }
       state.docxGenerated = result?.ok !== false;
       state.docxPath = result?.docx_path || outputDocxPath;
@@ -275,6 +301,7 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
     const toolHandlers = createToolHandlers({
       logAction,
       logDetail,
+      debugLog,
       paths,
       state: agentState,
     });
