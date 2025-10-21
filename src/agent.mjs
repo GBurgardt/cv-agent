@@ -25,10 +25,20 @@ Rules:
   • LANGUAGES: provide them already formatted as a single string with one bullet per line (example: "• English (Native)\n• Spanish (Advanced)").
   • KEY INDUSTRIES: provide them already formatted as a single string with one bullet per line (example: "• Fintech\n• Retail").
   • EDUCATION: array of objects { institution, degree, period }.
-  • EXPERIENCE: chronological array of objects { role, company, period, location, summary, bullets }. Each bullets item is a short string; include key achievements or responsibilities.
+  • EXPERIENCE: chronological array of objects { role, company, period, location, summary, bullets, tech? }. Each bullets item is a short string; include 0-5 highlights and note the tech stack when available.
   • NAME and ROLE if you can infer them; otherwise leave empty strings.
-- When calling fill_docx_template, set LANGUAGES_LINES and INDUSTRIES_LINES to those bullet-formatted strings, and SKILLS to a single comma-separated string. EDUCATION and EXPERIENCE remain arrays as described; EXPERIENCE.bullets must be an array of strings.
-- The template expects these exact fields: SUMMARY, SKILLS, LANGUAGES_LINES (string with the bullet list exactly as it should appear), INDUSTRIES_LINES (string with the bullet list exactly as it should appear), EDUCATION (array), EXPERIENCE (array with bullets array), NAME, ROLE.
+- When calling fill_docx_template, set:
+    • LANGUAGES_LINES and INDUSTRIES_LINES to those bullet-formatted strings.
+    • SKILLS to a single comma-separated string.
+    • EXPERIENCE_LINES to a multi-line string where every entry follows this pattern (blank line between entries):
+      "**Company — Role**"
+      "Period | Location"
+      "Summary: …"
+      "• Bullet point"
+      "• Bullet point"
+      "Tech: …" (omit when not available)
+  EDUCATION remains an array; EXPERIENCE_LINES is the only experience field consumed by the template.
+- The template expects these exact fields: SUMMARY, SKILLS, LANGUAGES_LINES, INDUSTRIES_LINES, EDUCATION (array), EXPERIENCE_LINES (string), NAME, ROLE.
 - Leave missing information as empty strings or empty arrays as appropriate.
 - Treat any message starting with "Iteration Insight" as the highest priority instruction; follow it before taking any further step.
 

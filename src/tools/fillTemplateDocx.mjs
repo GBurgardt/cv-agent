@@ -7,6 +7,7 @@ import {
   hasText,
   toList,
   normalizeFields,
+  buildExperienceLines,
 } from "../utils/docxFieldUtils.mjs";
 
 export function addDerivedFields(fields = {}) {
@@ -99,6 +100,21 @@ export function addDerivedFields(fields = {}) {
   }
   if (!hasText(draft.INDUSTRIES_LINES)) {
     draft.INDUSTRIES_LINES = "";
+  }
+  const hasExperienceLines =
+    typeof draft.EXPERIENCE_LINES === "string" &&
+    draft.EXPERIENCE_LINES.trim();
+  if (!hasExperienceLines && draft.EXPERIENCE) {
+    const formatted = buildExperienceLines(draft.EXPERIENCE);
+    if (hasText(formatted)) {
+      draft.EXPERIENCE_LINES = formatted;
+    }
+  }
+  if (
+    typeof draft.EXPERIENCE_LINES !== "string" ||
+    !draft.EXPERIENCE_LINES.trim()
+  ) {
+    draft.EXPERIENCE_LINES = "";
   }
 
   return draft;

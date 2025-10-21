@@ -98,3 +98,62 @@ export function normalizeFields(fields = {}) {
   }
   return normalized;
 }
+
+export function buildExperienceLines(experiences) {
+  const entries = toList(experiences)
+    .map((entry) => {
+      if (!entry) return "";
+      if (typeof entry === "string") return entry.trim();
+      if (typeof entry !== "object") return "";
+
+      const role = hasText(entry.role) ? entry.role.trim() : "";
+      const company = hasText(entry.company) ? entry.company.trim() : "";
+      const headerParts = [];
+      if (company) headerParts.push(company);
+      if (role) headerParts.push(role);
+      const header = headerParts.length
+        ? `**${headerParts.join(" — ")}**`
+        : "";
+
+      const period = hasText(entry.period) ? entry.period.trim() : "";
+      const location = hasText(entry.location) ? entry.location.trim() : "";
+      const metaParts = [];
+      if (period) metaParts.push(period);
+      if (location) metaParts.push(location);
+      const meta = metaParts.length ? metaParts.join(" | ") : "";
+
+      const summary = hasText(entry.summary) ? entry.summary.trim() : "";
+
+      const bullets = Array.isArray(entry.bullets)
+        ? entry.bullets
+            .map((bullet) =>
+              hasText(bullet)
+                ? bullet.trim().startsWith(BULLET_CHAR)
+                  ? bullet.trim()
+                  : `${BULLET_CHAR} ${bullet.trim()}`
+                : ""
+            )
+            .filter(hasText)
+        : [];
+
+      const techRaw =
+        entry.tech ||
+        entry.stack ||
+        entry.technologies ||
+        entry.tools ||
+        entry.language;
+      const tech = hasText(techRaw) ? `Tech: ${techRaw.trim()}` : "";
+
+      const lines = [];
+      if (header) lines.push(header);
+      if (meta) lines.push(meta);
+      if (summary) lines.push(summary);
+      if (bullets.length) lines.push(bullets.join("\n"));
+      if (tech) lines.push(tech);
+
+      return lines.filter(hasText).join("\n");
+    })
+    .filter(hasText);
+
+  return entries.join("\n\n");
+}
