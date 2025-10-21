@@ -8,24 +8,60 @@ const BULLET_CHAR = "•";
 const LANGUAGE_LEVEL_MAP = {
   native: "native",
   "native or bilingual": "native",
-  "bilingual": "native",
+  bilingual: "native",
   "nativo": "native",
   "nativo o bilingue": "native",
+  "nativo o bilingüe": "native",
   fluent: "fluent",
-  "fluido": "fluent",
-  "advanced": "advanced",
-  "avanzado": "advanced",
+  fluido: "fluent",
   "upper intermediate": "advanced",
+  advanced: "advanced",
+  avanzado: "advanced",
   "profesional": "intermediate",
-  "professional": "intermediate",
+  professional: "intermediate",
   "professional working proficiency": "intermediate",
-  "intermedio": "intermediate",
-  "intermediate": "intermediate",
+  intermedio: "intermediate",
+  intermediate: "intermediate",
+  intermediario: "intermediate",
   "elemental": "basic",
-  "basico": "basic",
-  "básico": "basic",
+  basico: "basic",
+  básico: "basic",
   basic: "basic",
   beginner: "basic",
+  inicial: "basic",
+};
+
+const LANGUAGE_NAME_MAP = {
+  ingles: "English",
+  inglés: "English",
+  english: "English",
+  espanol: "Spanish",
+  español: "Spanish",
+  spanish: "Spanish",
+  portugues: "Portuguese",
+  portugués: "Portuguese",
+  portuguese: "Portuguese",
+  frances: "French",
+  francés: "French",
+  french: "French",
+  aleman: "German",
+  alemán: "German",
+  german: "German",
+  italiano: "Italian",
+  italian: "Italian",
+  italiano: "Italian",
+  catalan: "Catalan",
+  catalán: "Catalan",
+  catalan: "Catalan",
+  chino: "Chinese",
+  mandarin: "Chinese",
+  mandarín: "Chinese",
+  japones: "Japanese",
+  japonés: "Japanese",
+  japanese: "Japanese",
+  arabe: "Arabic",
+  árabe: "Arabic",
+  arabic: "Arabic",
 };
 
 const IGNORED_TEXT_VALUES = new Set(["undefined", "null", "n/a", "na", "-"]);
@@ -42,7 +78,46 @@ function normalizeKey(value = "") {
 function mapLanguageLevel(raw) {
   if (!raw) return "";
   const key = normalizeKey(String(raw));
-  return LANGUAGE_LEVEL_MAP[key] || String(raw).trim().toLowerCase();
+  const canonical = LANGUAGE_LEVEL_MAP[key];
+  if (!canonical) {
+    const trimmed = String(raw).trim();
+    return trimmed ? trimmed : "";
+  }
+  switch (canonical) {
+    case "native":
+      return "Native";
+    case "fluent":
+      return "Fluent";
+    case "advanced":
+      return "Advanced";
+    case "intermediate":
+      return "Intermediate";
+    case "basic":
+      return "Basic";
+    default:
+      return canonical;
+  }
+}
+
+function mapLanguageName(raw) {
+  if (!raw) return "";
+  const normalized = normalizeKey(String(raw));
+  if (LANGUAGE_NAME_MAP[normalized]) {
+    return LANGUAGE_NAME_MAP[normalized];
+  }
+  // Title-case fallback without accents
+  const ascii = String(raw)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!ascii) return "";
+  return ascii
+    .split(" ")
+    .map((part) =>
+      part ? part[0].toUpperCase() + part.slice(1).toLowerCase() : ""
+    )
+    .join(" ");
 }
 
 function toList(value) {
@@ -166,13 +241,14 @@ function addDerivedFields(fields = {}) {
         if (typeof entry === "string") {
           const trimmed = entry.trim();
           if (!trimmed) return "";
-          return trimmed.includes("(") ? trimmed : `${trimmed}`;
+          const name = mapLanguageName(trimmed);
+          return name;
         }
         const language =
-          (typeof entry.language === "string" && entry.language.trim()) ||
-          (typeof entry.name === "string" && entry.name.trim()) ||
-          (typeof entry.label === "string" && entry.label.trim()) ||
-          (typeof entry.text === "string" && entry.text.trim()) ||
+          mapLanguageName(entry?.language) ||
+          mapLanguageName(entry?.name) ||
+          mapLanguageName(entry?.label) ||
+          mapLanguageName(entry?.text) ||
           "";
         const levelRaw =
           (typeof entry.level === "string" && entry.level.trim()) ||
@@ -184,7 +260,7 @@ function addDerivedFields(fields = {}) {
         const label = language || "";
         if (!label) return "";
         if (!levelMapped) return label;
-        return `${label}(${levelMapped})`;
+        return `${label} (${levelMapped})`;
       })
       .map((line) => line.trim())
       .filter((line) => {
