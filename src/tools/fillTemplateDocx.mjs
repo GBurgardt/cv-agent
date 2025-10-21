@@ -5,119 +5,8 @@ import PizZip from "pizzip";
 
 const BULLET_CHAR = "•";
 
-const LANGUAGE_LEVEL_MAP = {
-  native: "native",
-  "native or bilingual": "native",
-  bilingual: "native",
-  "nativo": "native",
-  "nativo o bilingue": "native",
-  "nativo o bilingüe": "native",
-  fluent: "fluent",
-  fluido: "fluent",
-  "upper intermediate": "advanced",
-  advanced: "advanced",
-  avanzado: "advanced",
-  "profesional": "intermediate",
-  professional: "intermediate",
-  "professional working proficiency": "intermediate",
-  intermedio: "intermediate",
-  intermediate: "intermediate",
-  intermediario: "intermediate",
-  "elemental": "basic",
-  basico: "basic",
-  básico: "basic",
-  basic: "basic",
-  beginner: "basic",
-  inicial: "basic",
-};
-
-const LANGUAGE_NAME_MAP = {
-  ingles: "English",
-  inglés: "English",
-  english: "English",
-  espanol: "Spanish",
-  español: "Spanish",
-  spanish: "Spanish",
-  portugues: "Portuguese",
-  portugués: "Portuguese",
-  portuguese: "Portuguese",
-  frances: "French",
-  francés: "French",
-  french: "French",
-  aleman: "German",
-  alemán: "German",
-  german: "German",
-  italiano: "Italian",
-  italian: "Italian",
-  italiano: "Italian",
-  catalan: "Catalan",
-  catalán: "Catalan",
-  catalan: "Catalan",
-  chino: "Chinese",
-  mandarin: "Chinese",
-  mandarín: "Chinese",
-  japones: "Japanese",
-  japonés: "Japanese",
-  japanese: "Japanese",
-  arabe: "Arabic",
-  árabe: "Arabic",
-  arabic: "Arabic",
-};
-
-const IGNORED_TEXT_VALUES = new Set(["undefined", "null", "n/a", "na", "-"]);
-
-function normalizeKey(value = "") {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function mapLanguageLevel(raw) {
-  if (!raw) return "";
-  const key = normalizeKey(String(raw));
-  const canonical = LANGUAGE_LEVEL_MAP[key];
-  if (!canonical) {
-    const trimmed = String(raw).trim();
-    return trimmed ? trimmed : "";
-  }
-  switch (canonical) {
-    case "native":
-      return "Native";
-    case "fluent":
-      return "Fluent";
-    case "advanced":
-      return "Advanced";
-    case "intermediate":
-      return "Intermediate";
-    case "basic":
-      return "Basic";
-    default:
-      return canonical;
-  }
-}
-
-function mapLanguageName(raw) {
-  if (!raw) return "";
-  const normalized = normalizeKey(String(raw));
-  if (LANGUAGE_NAME_MAP[normalized]) {
-    return LANGUAGE_NAME_MAP[normalized];
-  }
-  // Title-case fallback without accents
-  const ascii = String(raw)
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!ascii) return "";
-  return ascii
-    .split(" ")
-    .map((part) =>
-      part ? part[0].toUpperCase() + part.slice(1).toLowerCase() : ""
-    )
-    .join(" ");
+function hasText(value) {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function toList(value) {
@@ -227,6 +116,8 @@ function normalizeFields(fields = {}) {
 
 function addDerivedFields(fields = {}) {
   const draft = { ...fields };
+  const hasLanguagesLines =
+    typeof draft.LANGUAGES_LINES === "string" && draft.LANGUAGES_LINES.trim();
   const languageSource =
     fields?.LANGUAGES ??
     fields?.languages ??
@@ -234,46 +125,43 @@ function addDerivedFields(fields = {}) {
     fields?.language ??
     fields?.langs;
 
-  if (languageSource) {
+  if (!hasLanguagesLines && languageSource) {
     const languages = toList(languageSource)
       .map((entry) => {
-        if (!entry) return "";
-        if (typeof entry === "string") {
-          const trimmed = entry.trim();
-          if (!trimmed) return "";
-          const name = mapLanguageName(trimmed);
-          return name;
-        }
-        const language =
-          mapLanguageName(entry?.language) ||
-          mapLanguageName(entry?.name) ||
-          mapLanguageName(entry?.label) ||
-          mapLanguageName(entry?.text) ||
-          "";
-        const levelRaw =
-          (typeof entry.level === "string" && entry.level.trim()) ||
-          (typeof entry.proficiency === "string" && entry.proficiency.trim()) ||
-          (typeof entry.fluency === "string" && entry.fluency.trim()) ||
-          (typeof entry.description === "string" && entry.description.trim()) ||
-          "";
-        const levelMapped = mapLanguageLevel(levelRaw);
-        const label = language || "";
-        if (!label) return "";
-        if (!levelMapped) return label;
-        return `${label} (${levelMapped})`;
+        if (typeof entry === "string") return entry.trim();
+        if (!entry || typeof entry !== "object") return "";
+        const name =
+          [entry.language, entry.name, entry.label, entry.text].find((value) =>
+            hasText(value)
+          ) || "";
+        const level =
+          [
+            entry.level,
+            entry.proficiency,
+            entry.fluency,
+            entry.description,
+          ].find((value) => hasText(value)) || "";
+        if (!hasText(name)) return "";
+        const label = name.trim();
+        return hasText(level)
+          ? `${label} (${level.trim()})`
+          : label;
       })
       .map((line) => line.trim())
-      .filter((line) => {
-        if (!line) return false;
-        const key = normalizeKey(line);
-        return !IGNORED_TEXT_VALUES.has(key);
-      })
+      .filter((line) => hasText(line))
       .filter((line, idx, arr) => arr.indexOf(line) === idx)
-      .map((line) => `${BULLET_CHAR} ${line}`);
+      .map((line) =>
+        line.startsWith(BULLET_CHAR) ? line : `${BULLET_CHAR} ${line}`
+      );
 
-    draft.LANGUAGES_LINES = languages.join("\n");
+    if (languages.length > 0) {
+      draft.LANGUAGES_LINES = languages.join("\n");
+    }
   }
 
+  const hasIndustriesLines =
+    typeof draft.INDUSTRIES_LINES === "string" &&
+    draft.INDUSTRIES_LINES.trim();
   const industriesSource =
     fields?.INDUSTRIES ??
     fields?.industries ??
@@ -281,40 +169,36 @@ function addDerivedFields(fields = {}) {
     fields?.sectors ??
     fields?.industry;
 
-  if (industriesSource) {
+  if (!hasIndustriesLines && industriesSource) {
     const industries = toList(industriesSource)
       .flatMap((item) =>
         typeof item === "string" ? item.split(/[\r\n]+/) : [item]
       )
       .map((item) => {
-        if (!item) return "";
-        if (typeof item === "string") return item.trim();
-        if (typeof item === "object") {
-          const label =
-            (typeof item.name === "string" && item.name.trim()) ||
-            (typeof item.label === "string" && item.label.trim()) ||
-            (typeof item.text === "string" && item.text.trim()) ||
-            "";
-          return label;
-        }
-        return String(item).trim();
-      })
-      .map((line) => line.trim())
-      .filter((line) => {
-        if (!line) return false;
-        const key = normalizeKey(line);
-        return !IGNORED_TEXT_VALUES.has(key);
-      })
-      .filter((line, idx, arr) => arr.indexOf(line) === idx)
-      .map((line) => `${BULLET_CHAR} ${line}`);
+    if (typeof item === "string") return item.trim();
+    if (!item || typeof item !== "object") return "";
+    const label =
+      [item.name, item.label, item.text, item.value].find((value) =>
+        hasText(value)
+      ) || "";
+    return label.trim();
+  })
+  .map((line) => line.trim())
+  .filter((line) => hasText(line))
+  .filter((line, idx, arr) => arr.indexOf(line) === idx)
+  .map((line) =>
+    line.startsWith(BULLET_CHAR) ? line : `${BULLET_CHAR} ${line}`
+  );
 
-    draft.INDUSTRIES_LINES = industries.join("\n");
+    if (industries.length > 0) {
+      draft.INDUSTRIES_LINES = industries.join("\n");
+    }
   }
 
-  if (!draft.LANGUAGES_LINES) {
+  if (!hasText(draft.LANGUAGES_LINES)) {
     draft.LANGUAGES_LINES = "";
   }
-  if (!draft.INDUSTRIES_LINES) {
+  if (!hasText(draft.INDUSTRIES_LINES)) {
     draft.INDUSTRIES_LINES = "";
   }
 
@@ -339,6 +223,11 @@ export async function fillTemplateDocx({
   try {
     const enriched = addDerivedFields(fields);
     const data = normalizeFields(enriched);
+    if (process.env.CV_AGENT_DEBUG === "1") {
+      console.log("[fillTemplateDocx] fields input:", fields);
+      console.log("[fillTemplateDocx] fields derived:", enriched);
+      console.log("[fillTemplateDocx] fields normalized:", data);
+    }
     doc.render(data);
   } catch (err) {
     const details =

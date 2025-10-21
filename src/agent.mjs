@@ -22,12 +22,13 @@ Rules:
 - Build the following structure:
   • SUMMARY: 4–6 lines focused on recruitment highlights.
   • SKILLS: one comma-separated string with the top technologies (deduplicate by case-insensitive label).
-  • LANGUAGES: array of objects { language, level, proficiency? }. Normalize proficiency to English labels (eg. Beginner, Intermediate, Advanced, Native).
-  • KEY INDUSTRIES: array of strings with the main industries.
+  • LANGUAGES: provide them already formatted as a single string with one bullet per line (example: "• English (Native)\n• Spanish (Advanced)").
+  • KEY INDUSTRIES: provide them already formatted as a single string with one bullet per line (example: "• Fintech\n• Retail").
   • EDUCATION: array of objects { institution, degree, period }.
   • EXPERIENCE: chronological array of objects { role, company, period, location, summary, bullets }. Each bullets item is a short string; include key achievements or responsibilities.
   • NAME and ROLE if you can infer them; otherwise leave empty strings.
-- The template expects these exact fields: SUMMARY, SKILLS, LANGUAGES_LINES (string with lines already formatted), INDUSTRIES_LINES (string with lines already formatted), EDUCATION (array), EXPERIENCE (array with bullets array), NAME, ROLE.
+- When calling fill_docx_template, set LANGUAGES_LINES and INDUSTRIES_LINES to those bullet-formatted strings, and SKILLS to a single comma-separated string. EDUCATION and EXPERIENCE remain arrays as described; EXPERIENCE.bullets must be an array of strings.
+- The template expects these exact fields: SUMMARY, SKILLS, LANGUAGES_LINES (string with the bullet list exactly as it should appear), INDUSTRIES_LINES (string with the bullet list exactly as it should appear), EDUCATION (array), EXPERIENCE (array with bullets array), NAME, ROLE.
 - Leave missing information as empty strings or empty arrays as appropriate.
 - Treat any message starting with "Iteration Insight" as the highest priority instruction; follow it before taking any further step.
 
@@ -158,12 +159,23 @@ function createToolHandlers(context) {
     logAction("Calling fill_docx_template");
     logDetail(`template_path: ${templatePathArg}`);
     logDetail(`output_docx_path: ${outputDocxPath}`);
+    logDetail(
+      `fields keys: ${Object.keys(args?.fields || {})
+        .sort()
+        .join(", ") || "(none)"}`
+    );
     try {
       result = await fillTemplateDocx({
         templatePath: templatePathArg,
         outputDocxPath,
         fields: args?.fields || {},
       });
+      if (DEBUG) {
+        debugLog("fill-docx-args", {
+          fields: args?.fields,
+        });
+        debugLog("fill-docx-result", result);
+      }
       state.docxGenerated = result?.ok !== false;
       state.docxPath = result?.docx_path || outputDocxPath;
       state.lastError = result?.error || null;
