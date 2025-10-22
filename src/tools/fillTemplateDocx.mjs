@@ -7,7 +7,7 @@ import {
   hasText,
   toList,
   normalizeFields,
-  buildExperienceLines,
+  buildExperienceEntries,
 } from "../utils/docxFieldUtils.mjs";
 
 export function addDerivedFields(fields = {}) {
@@ -101,21 +101,27 @@ export function addDerivedFields(fields = {}) {
   if (!hasText(draft.INDUSTRIES_LINES)) {
     draft.INDUSTRIES_LINES = "";
   }
-  const hasExperienceLines =
-    typeof draft.EXPERIENCE_LINES === "string" &&
-    draft.EXPERIENCE_LINES.trim();
-  if (!hasExperienceLines && draft.EXPERIENCE) {
-    const formatted = buildExperienceLines(draft.EXPERIENCE);
-    if (hasText(formatted)) {
-      draft.EXPERIENCE_LINES = formatted;
-    }
-  }
-  if (
-    typeof draft.EXPERIENCE_LINES !== "string" ||
-    !draft.EXPERIENCE_LINES.trim()
-  ) {
-    draft.EXPERIENCE_LINES = "";
-  }
+
+  const experienceEntries = buildExperienceEntries(
+    draft.EXPERIENCE ?? fields.EXPERIENCE ?? []
+  );
+  draft.EXPERIENCE = experienceEntries;
+  draft.EXPERIENCE_LINES = experienceEntries
+    .map((exp) => {
+      const header = [exp.company, exp.role].filter(hasText).join(" — ");
+      const meta = [exp.period, exp.location].filter(hasText).join(" | ");
+      const parts = [];
+      if (hasText(header)) parts.push(header);
+      if (hasText(meta)) parts.push(meta);
+      if (hasText(exp.summary)) parts.push(exp.summary);
+      if (Array.isArray(exp.bullets) && exp.bullets.length) {
+        parts.push(exp.bullets.map((b) => `${BULLET_CHAR} ${b}`).join("\n"));
+      }
+      if (hasText(exp.tech)) parts.push(`Tech: ${exp.tech}`);
+      return parts.join("\n");
+    })
+    .filter(hasText)
+    .join("\n\n");
 
   return draft;
 }

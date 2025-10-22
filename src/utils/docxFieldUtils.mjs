@@ -52,24 +52,6 @@ export function normalizeFields(fields = {}) {
   if (!fields || typeof fields !== "object") return {};
   const normalized = {};
   for (const [key, rawValue] of Object.entries(fields)) {
-    if (Array.isArray(rawValue) && key === "experience") {
-      const experiences = rawValue
-        .map((entry) => {
-          if (!entry || typeof entry !== "object") return null;
-          const working = { ...entry };
-          if (!Array.isArray(working.bullets) && Array.isArray(working.highlights)) {
-            working.bullets = working.highlights;
-          }
-          if (working.highlights) delete working.highlights;
-          if (!Array.isArray(working.bullets)) working.bullets = [];
-          const normalizedEntry = normalizeFields(working);
-          return isEmptyObject(normalizedEntry) ? null : normalizedEntry;
-        })
-        .filter(Boolean);
-      normalized[key] = experiences;
-      continue;
-    }
-
     if (Array.isArray(rawValue) && (key === "bullets" || key === "highlights")) {
       const bullets = rawValue
         .map((item) => {
@@ -88,8 +70,7 @@ export function normalizeFields(fields = {}) {
           }
           return String(item).trim();
         })
-        .filter((text) => text && text.length > 0)
-        .map((text) => ({ text }));
+        .filter((text) => text && text.length > 0);
       normalized[key] = bullets;
       continue;
     }
@@ -99,61 +80,96 @@ export function normalizeFields(fields = {}) {
   return normalized;
 }
 
-export function buildExperienceLines(experiences) {
-  const entries = toList(experiences)
+export function buildExperienceEntries(experiences) {
+  return toList(experiences)
     .map((entry) => {
-      if (!entry) return "";
-      if (typeof entry === "string") return entry.trim();
-      if (typeof entry !== "object") return "";
+      if (!entry) return null;
+      if (typeof entry === "string") {
+        const value = entry.trim();
+        return value
+          ? {
+              company: "",
+              role: value,
+              period: "",
+              location: "",
+              summary: value,
+              bullets: [],
+              tech: "",
+            }
+          : null;
+      }
+      if (typeof entry !== "object") return null;
 
-      const role = hasText(entry.role) ? entry.role.trim() : "";
-      const company = hasText(entry.company) ? entry.company.trim() : "";
-      const headerParts = [];
-      if (company) headerParts.push(company);
-      if (role) headerParts.push(role);
-      const header = headerParts.length
-        ? `**${headerParts.join(" — ")}**`
+      const company = hasText(entry.company)
+        ? entry.company.trim()
+        : hasText(entry.employer)
+        ? entry.employer.trim()
+        : hasText(entry.organization)
+        ? entry.organization.trim()
         : "";
 
-      const period = hasText(entry.period) ? entry.period.trim() : "";
-      const location = hasText(entry.location) ? entry.location.trim() : "";
-      const metaParts = [];
-      if (period) metaParts.push(period);
-      if (location) metaParts.push(location);
-      const meta = metaParts.length ? metaParts.join(" | ") : "";
+      const role = hasText(entry.role)
+        ? entry.role.trim()
+        : hasText(entry.title)
+        ? entry.title.trim()
+        : "";
 
-      const summary = hasText(entry.summary) ? entry.summary.trim() : "";
+      const period = hasText(entry.period)
+        ? entry.period.trim()
+        : hasText(entry.dates)
+        ? entry.dates.trim()
+        : hasText(entry.date)
+        ? entry.date.trim()
+        : "";
+
+      const location = hasText(entry.location)
+        ? entry.location.trim()
+        : hasText(entry.city)
+        ? entry.city.trim()
+        : "";
+
+      const summary = hasText(entry.summary)
+        ? entry.summary.trim()
+        : hasText(entry.description)
+        ? entry.description.trim()
+        : "";
 
       const bullets = Array.isArray(entry.bullets)
-        ? entry.bullets
-            .map((bullet) =>
-              hasText(bullet)
-                ? bullet.trim().startsWith(BULLET_CHAR)
-                  ? bullet.trim()
-                  : `${BULLET_CHAR} ${bullet.trim()}`
-                : ""
-            )
-            .filter(hasText)
+        ? entry.bullets.filter(hasText).map((b) => b.trim())
+        : Array.isArray(entry.highlights)
+        ? entry.highlights.filter(hasText).map((b) => b.trim())
         : [];
 
-      const techRaw =
+      const techSource =
         entry.tech ||
         entry.stack ||
         entry.technologies ||
         entry.tools ||
-        entry.language;
-      const tech = hasText(techRaw) ? `Tech: ${techRaw.trim()}` : "";
+        entry.language ||
+        "";
+      const tech = hasText(techSource) ? techSource.trim() : "";
 
-      const lines = [];
-      if (header) lines.push(header);
-      if (meta) lines.push(meta);
-      if (summary) lines.push(summary);
-      if (bullets.length) lines.push(bullets.join("\n"));
-      if (tech) lines.push(tech);
+      if (
+        !hasText(company) &&
+        !hasText(role) &&
+        !hasText(period) &&
+        !hasText(location) &&
+        !hasText(summary) &&
+        !bullets.length &&
+        !hasText(tech)
+      ) {
+        return null;
+      }
 
-      return lines.filter(hasText).join("\n");
+      return {
+        company,
+        role,
+        period,
+        location,
+        summary,
+        bullets,
+        tech,
+      };
     })
-    .filter(hasText);
-
-  return entries.join("\n\n");
+    .filter(Boolean);
 }
