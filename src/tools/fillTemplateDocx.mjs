@@ -131,6 +131,12 @@ export async function fillTemplateDocx({
   outputDocxPath,
   fields = {},
 }) {
+  if (!fields || typeof fields !== "object" || Object.keys(fields).length === 0) {
+    throw new Error(
+      "fill_docx_template requires a non-empty 'fields' object; received empty payload."
+    );
+  }
+
   // Resolve locations once so docxtemplater reads/writes from deterministic paths.
   const absTemplate = path.resolve(templatePath);
   const absDocx = path.resolve(outputDocxPath);

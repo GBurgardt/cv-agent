@@ -56,21 +56,17 @@ export function normalizeFields(fields = {}) {
       const bullets = rawValue
         .map((item) => {
           if (!item) return null;
-          if (typeof item === "string") return item.trim();
-          if (typeof item === "object") {
-            const text =
-              typeof item.text === "string"
-                ? item.text
-                : typeof item.description === "string"
-                ? item.description
-                : typeof item.value === "string"
-                ? item.value
-                : "";
-            return text.trim();
+          if (typeof item === "object" && (hasText(item.value) || hasText(item["."]))) {
+            const text = hasText(item.value) ? item.value.trim() : item["."].trim();
+            return { value: text, ".": text };
           }
-          return String(item).trim();
+          if (typeof item === "string") {
+            const text = item.trim();
+            return text ? { value: text, ".": text } : null;
+          }
+          return null;
         })
-        .filter((text) => text && text.length > 0);
+        .filter(Boolean);
       normalized[key] = bullets;
       continue;
     }
@@ -95,6 +91,7 @@ export function buildExperienceEntries(experiences) {
               summary: value,
               bullets: [],
               tech: "",
+              bullets_lines: "",
             }
           : null;
       }
@@ -134,11 +131,16 @@ export function buildExperienceEntries(experiences) {
         ? entry.description.trim()
         : "";
 
-      const bullets = Array.isArray(entry.bullets)
+      const bulletStrings = Array.isArray(entry.bullets)
         ? entry.bullets.filter(hasText).map((b) => b.trim())
         : Array.isArray(entry.highlights)
         ? entry.highlights.filter(hasText).map((b) => b.trim())
         : [];
+      const bullets = bulletStrings.map((text) => ({ value: text, ".": text }));
+
+      const bulletsLines = bulletStrings.length
+        ? bulletStrings.map((text) => `${BULLET_CHAR} ${text}`).join("\n")
+        : "";
 
       const techSource =
         entry.tech ||
@@ -168,6 +170,7 @@ export function buildExperienceEntries(experiences) {
         location,
         summary,
         bullets,
+        bullets_lines: bulletsLines,
         tech,
       };
     })
