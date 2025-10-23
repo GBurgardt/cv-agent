@@ -55,18 +55,20 @@ export function normalizeFields(fields = {}) {
     if (Array.isArray(rawValue) && (key === "bullets" || key === "highlights")) {
       const bullets = rawValue
         .map((item) => {
-          if (!item) return null;
-          if (typeof item === "object" && (hasText(item.value) || hasText(item["."]))) {
-            const text = hasText(item.value) ? item.value.trim() : item["."].trim();
-            return { value: text, ".": text };
+          if (!item) return "";
+          if (typeof item === "string") return item.trim();
+          if (typeof item === "object") {
+            const candidate =
+              (hasText(item.text) && item.text) ||
+              (hasText(item.description) && item.description) ||
+              (hasText(item.value) && item.value) ||
+              (hasText(item["."]) && item["."]);
+            return candidate ? candidate.trim() : "";
           }
-          if (typeof item === "string") {
-            const text = item.trim();
-            return text ? { value: text, ".": text } : null;
-          }
-          return null;
+          return String(item).trim();
         })
-        .filter(Boolean);
+        .filter(hasText)
+        .map((text) => text.trim());
       normalized[key] = bullets;
       continue;
     }
@@ -132,14 +134,40 @@ export function buildExperienceEntries(experiences) {
         : "";
 
       const bulletStrings = Array.isArray(entry.bullets)
-        ? entry.bullets.filter(hasText).map((b) => b.trim())
+        ? entry.bullets
+            .map((b) =>
+              typeof b === "string"
+                ? b.trim()
+                : typeof b === "object"
+                ? (
+                    (hasText(b.text) && b.text.trim()) ||
+                    (hasText(b.description) && b.description.trim()) ||
+                    (hasText(b.value) && b.value.trim()) ||
+                    (hasText(b["."]) && b["."]?.trim()) ||
+                    ""
+                  )
+                : String(b || "").trim()
+            )
         : Array.isArray(entry.highlights)
-        ? entry.highlights.filter(hasText).map((b) => b.trim())
+        ? entry.highlights
+            .map((b) =>
+              typeof b === "string"
+                ? b.trim()
+                : typeof b === "object"
+                ? (
+                    (hasText(b.text) && b.text.trim()) ||
+                    (hasText(b.description) && b.description.trim()) ||
+                    (hasText(b.value) && b.value.trim()) ||
+                    (hasText(b["."]) && b["."]?.trim()) ||
+                    ""
+                  )
+                : String(b || "").trim()
+            )
         : [];
-      const bullets = bulletStrings.map((text) => ({ value: text, ".": text }));
+      const bullets = bulletStrings.filter(hasText);
 
-      const bulletsLines = bulletStrings.length
-        ? bulletStrings.map((text) => `${BULLET_CHAR} ${text}`).join("\n")
+      const bulletsLines = bullets.length
+        ? bullets.map((text) => `${BULLET_CHAR} ${text}`).join("\n")
         : "";
 
       const techSource =
