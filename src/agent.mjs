@@ -3,7 +3,6 @@ import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
 import { fillTemplateDocx } from "./tools/fillTemplateDocx.mjs";
-import { generateIterationInsight } from "./tools/iterationInsight.mjs";
 import { trimInputToBudget } from "./utils/tokenBudget.mjs";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -42,9 +41,8 @@ Rules:
     • SKILLS to a single comma-separated string.
     • EXPERIENCE to the array described above. Even if you also provide EXPERIENCE_LINES, the array must be present so the template loop renders properly. The template consumes {company}, {role}, {period}, {location}, {summary}, {#bullets}{.}{/bullets}, and {tech}.
   EDUCATION remains an array with {institution}, {degree}, {period}.
-- The template expects these exact fields: SUMMARY, SKILLS, LANGUAGES_LINES, INDUSTRIES_LINES, EDUCATION (array), EXPERIENCE_LINES (string), NAME, ROLE.
-- Leave missing information as empty strings or empty arrays as appropriate.
-- Treat any message starting with "Iteration Insight" as the highest priority instruction; follow it before taking any further step.
+  - The template expects these exact fields: SUMMARY, SKILLS, LANGUAGES_LINES, INDUSTRIES_LINES, EDUCATION (array), EXPERIENCE_LINES (string), NAME, ROLE.
+  - Leave missing information as empty strings or empty arrays as appropriate.
 
 Flow:
   1. Call fill_docx_template(template_path, output_docx_path, fields) with all fields populated. You may call it again if you need to correct data.
@@ -370,8 +368,6 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
     const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS ?? 128000);
 
     const agentState = createAgentState(absOut);
-    const iterationHistory = [];
-    const insightModelId = process.env.OPENAI_INSIGHT_MODEL || modelId;
     const paths = {
       template: absTemplate,
       outputDocx: absOut,
@@ -383,42 +379,6 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
       paths,
       state: agentState,
     });
-
-    const appendIterationInsight = async ({ iteration, actions, note }) => {
-      const summaryEntry = {
-        iteration,
-        toolCalls: (actions || []).map(({ name, result }) => ({
-          name,
-          ok: result?.ok !== false,
-          error: result?.error,
-        })),
-        fills: agentState.fills,
-        docxGenerated: agentState.docxGenerated,
-        lastError: agentState.lastError,
-        note,
-      };
-      iterationHistory.push(summaryEntry);
-      const historySlice = iterationHistory.slice(-3);
-      try {
-        const insight = await generateIterationInsight({
-          client: openai,
-          model: insightModelId,
-          history: historySlice,
-        });
-        if (insight) {
-          logAction(`Iteration insight ${iteration}`);
-          logDetail(insight);
-          input.push({
-            role: "system",
-            content: toInputContent(
-              `Iteration Insight ${iteration}: ${insight}`
-            ),
-          });
-        }
-      } catch (err) {
-        debugLog("insight-error", err?.message || err);
-      }
-    };
 
     turnLoop: for (let turn = 0; turn < 6; turn += 1) {
       const iteration = turn + 1;
@@ -441,8 +401,6 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
       const toolCalls = extractToolCalls(response);
       debugLog("tool-calls", toolCalls);
 
-      const iterationActions = [];
-      let iterationNote = "";
       let exitLoop = false;
 
       if (!toolCalls.length) {
@@ -452,12 +410,6 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
           content: toInputContent(
             "Remember to call fill_docx_template with all required fields to produce the DOCX."
           ),
-        });
-        iterationNote = "No tool calls; reminder sent.";
-        await appendIterationInsight({
-          iteration,
-          actions: iterationActions,
-          note: iterationNote,
         });
         previousResponseId = response.id;
         continue;
@@ -501,9 +453,6 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
 
         const conversationResult = outcome.conversationResult ?? { ok: false };
         input.push(makeToolOutput(callId, conversationResult));
-        if (outcome.recordResult) {
-          iterationActions.push({ name, args, result: outcome.recordResult });
-        }
         if (
           Array.isArray(outcome.extraMessages) &&
           outcome.extraMessages.length > 0
@@ -512,16 +461,8 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
             input.push(msg);
           }
         }
-        if (outcome.note) {
-          iterationNote = outcome.note;
-        }
 
         if (outcome.continueLoop) {
-          await appendIterationInsight({
-            iteration,
-            actions: iterationActions,
-            note: iterationNote,
-          });
           previousResponseId = response.id;
           continue turnLoop;
         }
@@ -531,13 +472,6 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
           break;
         }
       }
-
-      iterationNote = deriveDocxIterationNote(agentState, iterationNote);
-      await appendIterationInsight({
-        iteration,
-        actions: iterationActions,
-        note: iterationNote,
-      });
 
       previousResponseId = response.id;
       if (exitLoop) break;
@@ -580,14 +514,4 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
       }
     }
   }
-}
-function deriveDocxIterationNote(state, currentNote) {
-  if (currentNote) return currentNote;
-  if (state.docxGenerated) {
-    return "DOCX ready; confirm the result and share the final path.";
-  }
-  if (state.fills === 0) {
-    return "Call fill_docx_template with the completed field set.";
-  }
-  return "";
 }

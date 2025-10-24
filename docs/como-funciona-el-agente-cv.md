@@ -9,7 +9,6 @@ Arranque y contexto
 
 Herramientas disponibles
 - Sólo se expone `fill_docx_template`: recibe `fields` y delega en `src/tools/fillTemplateDocx.mjs` para inyectar datos en el DOCX. El módulo arma strings auxiliares (por ejemplo, bullets y experiencia) y usa Docxtemplater + PizZip para escribir el archivo final.
-- `generateIterationInsight` (en `src/tools/iterationInsight.mjs`) sigue produciendo notas cortas entre iteraciones para guiar al modelo.
 
 Loop de iteraciones
 - El agente permite hasta 6 iteraciones. Cada vuelta se envía a `responses.create` con `tool_choice: "auto"`.
