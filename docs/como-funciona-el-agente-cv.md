@@ -5,7 +5,7 @@ Entrada principal
 
 Arranque y contexto
 - `runCvAgent` valida la existencia del CV y del template, sube el PDF a OpenAI como `user_data` y arma los mensajes iniciales: prompt de sistema con reglas claras, recordatorio de rutas sugeridas y mensaje del usuario con el adjunto.
-- Se usa `gpt-5-codex` con presupuesto de tokens controlado por `trimInputToBudget`, que recorta historial viejo si hace falta.
+- Se usa `gpt-5-codex` enviando el historial completo; ya no recortamos mensajes en función del presupuesto de tokens.
 
 Herramientas disponibles
 - Sólo se expone `fill_docx_template`: recibe `fields` y delega en `src/tools/fillTemplateDocx.mjs` para inyectar datos en el DOCX. El módulo arma strings auxiliares (por ejemplo, bullets y experiencia) y usa Docxtemplater + PizZip para escribir el archivo final.

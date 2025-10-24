@@ -3,14 +3,11 @@ import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
 import { fillTemplateDocx } from "./tools/fillTemplateDocx.mjs";
-import { trimInputToBudget } from "./utils/tokenBudget.mjs";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const DEBUG = process.env.CV_AGENT_DEBUG === "1";
 // gpt-5-codex exposes ~200k tokens of context in public documentation:
 // https://github.com/openai/codex/issues/2002
-const MODEL_CONTEXT_LIMIT = Number(process.env.MODEL_CONTEXT_LIMIT ?? 200000);
-const CONTEXT_RESERVE_RATIO = Number(process.env.CONTEXT_RESERVE_RATIO ?? 0.6);
 
 const SYSTEM_PROMPT = `
 You are "CV Builder DOCX". Your goal is to transform the attached résumé PDF into a finished DOCX using the provided template.
@@ -207,23 +204,6 @@ function createAgentState(initialDocxPath) {
   };
 }
 
-function ensureContextBudget(messages, logDetail) {
-  const { removed, tokens } = trimInputToBudget(
-    messages,
-    MODEL_CONTEXT_LIMIT,
-    CONTEXT_RESERVE_RATIO
-  );
-  const status = `${tokens}/${MODEL_CONTEXT_LIMIT}`;
-  if (removed > 0) {
-    logDetail(
-      `context trimmed: removed ${removed} mensaje(s) antiguo(s), tokens aprox. ${status}.`
-    );
-  } else {
-    logDetail(`context tokens aprox.: ${status}`);
-  }
-  return { removed, tokens };
-}
-
 function createToolHandlers(context) {
   const { logAction, logDetail, debugLog, paths, state } = context;
   const safeDebug =
@@ -383,7 +363,6 @@ export async function runCvAgent({ cvPath, outPath, templatePath, model }) {
     turnLoop: for (let turn = 0; turn < 6; turn += 1) {
       const iteration = turn + 1;
       debugLog("turn", { turn: iteration });
-      ensureContextBudget(input, logDetail);
       const response = await openai.responses.create({
         model: modelId,
         input,
