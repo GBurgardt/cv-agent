@@ -40,7 +40,7 @@ Rules:
 - When calling fill_docx_template, set:
     • LANGUAGES_LINES and INDUSTRIES_LINES to those bullet-formatted strings.
     • SKILLS to a single comma-separated string.
-    • EXPERIENCE to the array described above. The template uses {company}, {role}, {period}, {location}, {summary}, the {#bullets}{.}{/bullets} loop, and {tech} for the "Tech:" line.
+    • EXPERIENCE to the array described above. Even if you also provide EXPERIENCE_LINES, the array must be present so the template loop renders properly. The template consumes {company}, {role}, {period}, {location}, {summary}, {#bullets}{.}{/bullets}, and {tech}.
   EDUCATION remains an array with {institution}, {degree}, {period}.
 - The template expects these exact fields: SUMMARY, SKILLS, LANGUAGES_LINES, INDUSTRIES_LINES, EDUCATION (array), EXPERIENCE_LINES (string), NAME, ROLE.
 - Leave missing information as empty strings or empty arrays as appropriate.

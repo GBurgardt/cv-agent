@@ -105,23 +105,31 @@ export function addDerivedFields(fields = {}) {
   const experienceEntries = buildExperienceEntries(
     draft.EXPERIENCE ?? fields.EXPERIENCE ?? []
   );
-  draft.EXPERIENCE = experienceEntries;
-  draft.EXPERIENCE_LINES = experienceEntries
-    .map((exp) => {
-      const header = [exp.company, exp.role].filter(hasText).join(" — ");
-      const meta = [exp.period, exp.location].filter(hasText).join(" | ");
-      const parts = [];
-      if (hasText(header)) parts.push(header);
-      if (hasText(meta)) parts.push(meta);
-      if (hasText(exp.summary)) parts.push(exp.summary);
-      if (Array.isArray(exp.bullets) && exp.bullets.length) {
-        parts.push(exp.bullets.map((b) => `${BULLET_CHAR} ${b}`).join("\n"));
-      }
-      if (hasText(exp.tech)) parts.push(`Tech: ${exp.tech}`);
-      return parts.join("\n");
-    })
-    .filter(hasText)
-    .join("\n\n");
+
+  if (experienceEntries.length > 0) {
+    draft.EXPERIENCE = experienceEntries;
+    draft.EXPERIENCE_LINES = experienceEntries
+      .map((exp) => {
+        const header = [exp.company, exp.role].filter(hasText).join(" — ");
+        const meta = [exp.period, exp.location].filter(hasText).join(" | ");
+        const parts = [];
+        if (hasText(header)) parts.push(header);
+        if (hasText(meta)) parts.push(meta);
+        if (hasText(exp.summary)) parts.push(exp.summary);
+        if (Array.isArray(exp.bullets) && exp.bullets.length) {
+          parts.push(exp.bullets.map((b) => `${BULLET_CHAR} ${b}`).join("\n"));
+        }
+        if (hasText(exp.tech)) parts.push(`Tech: ${exp.tech}`);
+        return parts.join("\n");
+      })
+      .filter(hasText)
+      .join("\n\n");
+  } else {
+    draft.EXPERIENCE = [];
+    draft.EXPERIENCE_LINES = hasText(fields.EXPERIENCE_LINES)
+      ? fields.EXPERIENCE_LINES
+      : draft.EXPERIENCE_LINES || "";
+  }
 
   return draft;
 }
@@ -157,6 +165,11 @@ export async function fillTemplateDocx({
       console.log("[fillTemplateDocx] fields input:", fields);
       console.log("[fillTemplateDocx] fields derived:", enriched);
       console.log("[fillTemplateDocx] fields normalized:", data);
+    }
+    if (!Array.isArray(data.EXPERIENCE) || data.EXPERIENCE.length === 0) {
+      throw new Error(
+        "fill_docx_template expects EXPERIENCE as a non-empty array; none received."
+      );
     }
     doc.render(data);
   } catch (err) {

@@ -21,5 +21,4 @@
 1. Extender el extractor para capturar por empleo: compañía, rol, fechas, bullets + tecnologías.
 2. Generar listas separadas para Languages e Industries.
 3. Formatear Education como entradas individuales (institución, título, años).
-4. Integrar estos campos en `fill_template_html` respetando los placeholders del template CloudX.
-
+4. Integrar estos campos en `fill_docx_template` respetando los placeholders del template CloudX.
