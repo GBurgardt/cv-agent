@@ -22,7 +22,7 @@ Rules:
 - Build the following structure:
   • SUMMARY: 4–6 lines focused on recruitment highlights.
   • SKILLS: one comma-separated string with the top technologies (deduplicate by case-insensitive label).
-  • LANGUAGES: provide them already formatted as a single string with one bullet per line (example: "• English (Native)\n• Spanish (Advanced)").
+  • LANGUAGES: provide them already formatted as a single string with one bullet per line. Always include exactly two entries—English and Spanish—with proficiency labelled as Basic, Intermediate, or Advanced (example: "• English (Advanced)\n• Spanish (Intermediate)").
   • KEY INDUSTRIES: provide them already formatted as a single string with one bullet per line (example: "• Fintech\n• Retail").
   • EDUCATION: array of objects { institution, degree, period }.
   • EXPERIENCE: chronological array of objects with the following shape:
