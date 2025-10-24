@@ -18,7 +18,7 @@ Rules:
 - Build the following structure:
   • SUMMARY: 4–6 lines focused on recruitment highlights.
   • SKILLS: one comma-separated string with the top technologies (deduplicate by case-insensitive label).
-  • LANGUAGES: provide them already formatted as a single string with one bullet per line. Always include exactly two entries—English and Spanish—with proficiency labelled as Basic, Intermediate, or Advanced (example: "• English (Advanced)\n• Spanish (Intermediate)").
+  • LANGUAGES: provide them already formatted as a single string with one bullet per line. Always include exactly two entries—English and Spanish—with proficiency labelled as Basic, Intermediate, or Native (example: "• English (Intermediate)\n• Spanish (Native)").
   • KEY INDUSTRIES: provide them already formatted as a single string with one bullet per line (example: "• Fintech\n• Retail").
   • EDUCATION: array of objects { institution, degree, period }.
   • EXPERIENCE: chronological array of objects with the following shape:
@@ -59,7 +59,8 @@ function toolsDefinition() {
         properties: {
           template_path: {
             type: "string",
-            description: "Absolute path to the DOCX template that includes placeholders.",
+            description:
+              "Absolute path to the DOCX template that includes placeholders.",
           },
           output_docx_path: {
             type: "string",
@@ -206,10 +207,7 @@ function createAgentState(initialDocxPath) {
 
 function createToolHandlers(context) {
   const { logAction, logDetail, debugLog, paths, state } = context;
-  const safeDebug =
-    typeof debugLog === "function"
-      ? debugLog
-      : () => {};
+  const safeDebug = typeof debugLog === "function" ? debugLog : () => {};
 
   const executeFillDocx = async (args = {}) => {
     const templatePathArg = args?.template_path || paths.template;
@@ -242,9 +240,11 @@ function createToolHandlers(context) {
     logDetail(`template_path: ${templatePathArg}`);
     logDetail(`output_docx_path: ${outputDocxPath}`);
     logDetail(
-      `fields keys: ${Object.keys(mergedFields || {})
-        .sort()
-        .join(", ") || "(none)"}`
+      `fields keys: ${
+        Object.keys(mergedFields || {})
+          .sort()
+          .join(", ") || "(none)"
+      }`
     );
     try {
       result = await fillTemplateDocx({
